@@ -12,6 +12,7 @@ class ChatOrchestrator:
         self.engine = engine
         self.history = history
         self.executor = executor
+        self.retrieval_service = retrieval_service
 
         self._cached_engine = None
         self._is_stream = False

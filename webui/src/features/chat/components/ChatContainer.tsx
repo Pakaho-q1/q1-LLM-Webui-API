@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSettings } from '@/services/SettingsContext';
-import { useSSE } from '@/contexts/SSEContext';
 import { ChatMessagesGemini } from './ui/ChatMessagesGemini';
 import { ChatInputGemini } from './ui/ChatInputGemini';
 import { X, Sparkles, Zap, Code2, BookOpen, ArrowRight } from 'lucide-react';
@@ -100,14 +99,12 @@ export const ChatContainer: React.FC = () => {
     clearError,
   } = useChat();
   const { settings } = useSettings();
-  const { currentConversation } = useSSE();
   const [editText, setEditText] = useState('');
-  const [idleInput, setIdleInput] = useState('');
 
   const handleSendMessage = (text: string, files: File[] = []) => {
     sendMessage(
       text,
-      files[0] ?? null,
+      files,
       {
         temperature: settings.temperature,
         max_tokens: settings.maxTokens,
@@ -120,25 +117,6 @@ export const ChatContainer: React.FC = () => {
 
   const handleRetry = (msg: any) => handleSendMessage(msg.content || '');
   const handleEdit = (msg: any) => setEditText(msg.content || '');
-
-  if (!currentConversation) {
-    return (
-      <div className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-base)]">
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <IdleScreen onQuickPrompt={(text) => setIdleInput(text)} />
-        </div>
-        <ChatInputGemini
-          onSend={(text, files) => handleSendMessage(text, files)}
-          onStop={stopGeneration}
-          disabled={!isConnected}
-          isGenerating={isGenerating}
-          initialText={idleInput}
-          onTextChange={setIdleInput}
-          onOpenTools={() => {}}
-        />
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-base)]">

@@ -21,7 +21,7 @@ import {
   Loader2,
   MicOff,
 } from 'lucide-react';
-import { useSSE } from '@/contexts/SSEContext';
+import { transcribeAudioFile } from '@/services/api.service';
 
 interface FileInfo {
   file: File;
@@ -69,14 +69,11 @@ type VoiceState = 'idle' | 'listening' | 'processing' | 'done' | 'error';
 interface VoicePopupProps {
   onClose: () => void;
   onTranscript: (text: string) => void;
-  /** Injected from SSEContext so we never call fetch() directly here */
-  sendForm: (endpoint: string, formData: FormData) => Promise<any>;
 }
 
 const VoicePopup: React.FC<VoicePopupProps> = ({
   onClose,
   onTranscript,
-  sendForm,
 }) => {
   const [voiceState, setVoiceState] = useState<VoiceState>('listening');
   const [errorMsg, setErrorMsg] = useState('');
@@ -183,12 +180,7 @@ const VoicePopup: React.FC<VoicePopupProps> = ({
     setVoiceState('processing');
 
     try {
-      const formData = new FormData();
-      formData.append('file', blob, 'voice.webm');
-      formData.append('action', 'transcribe');
-
-      const data = await sendForm('transcribe', formData);
-      const transcript: string = data.text || data.transcript || '';
+      const transcript = await transcribeAudioFile(blob);
 
       if (transcript.trim()) {
         onTranscript(transcript.trim());
@@ -442,7 +434,6 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
   const [showVoice, setShowVoice] = useState(false);
   const [dragCounter, setDragCounter] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { sendPayload, sendForm } = useSSE();
 
   useEffect(() => {
     if (initialText !== undefined) setText(initialText);
@@ -486,11 +477,8 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
   }, [text, files, isGenerating, disabled, onSend, onTextChange]);
 
   const handleStop = useCallback(async () => {
-    try {
-      await sendPayload({ action: 'stop_generation' });
-    } catch (_) {}
     onStop?.();
-  }, [sendPayload, onStop]);
+  }, [onStop]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -961,7 +949,6 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
       {showVoice && (
         <VoicePopup
           onClose={() => setShowVoice(false)}
-          sendForm={sendForm}
           onTranscript={(transcript) => {
             setText((prev) => (prev ? prev + ' ' + transcript : transcript));
             onTextChange?.(text ? text + ' ' + transcript : transcript);

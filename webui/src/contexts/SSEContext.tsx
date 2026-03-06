@@ -29,11 +29,6 @@ interface SSEContextType {
     payload: Record<string, unknown>,
     options?: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number },
   ) => Promise<any>;
-  sendForm: (
-    endpoint: string,
-    formData: FormData,
-    options?: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number },
-  ) => Promise<any>;
   setCurrentConversation?: (id: string | null) => void;
   subscribeToChat: (callback: (msg: any) => void) => () => void;
   retry: () => void;
@@ -376,65 +371,6 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     ],
   );
 
-  const sendForm = useCallback(
-    async (
-      endpoint: string,
-      formData: FormData,
-      options: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number } = {},
-    ): Promise<any> => {
-      formData.set('client_id', CLIENT_ID);
-      const requestKey = options.requestKey || `form:${endpoint}`;
-
-      try {
-        const response = await withRequestController(
-          requestKey,
-          async (signal) => {
-            const resp = await fetch(`${API_BASE}/api/${endpoint}`, {
-              method: 'POST',
-              body: formData,
-              signal,
-            });
-            if (!resp.ok) {
-              const payload = await resp.text().catch(() => '');
-              throw new ApiError(payload || `HTTP ${resp.status}: ${resp.statusText}`, resp.status, `/api/${endpoint}`, payload);
-            }
-            return resp.json();
-          },
-          options.cancelPrevious ?? false,
-        );
-
-        setLastError(null);
-        setAuthRequired(false);
-        return response;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          throw err;
-        }
-
-        const msg =
-          err instanceof Error ? err.message : `sendForm(${endpoint}) failed`;
-        setError(msg);
-        setLastError(msg);
-        pushToast(msg, 'error', 4500);
-
-        if (err instanceof ApiError && err.status === 401) {
-          setAuthRequired(true);
-          setActiveSidebarTab('settings');
-          pushToast('Unauthorized: please update API key in Settings', 'warning', 6000);
-        }
-
-        throw err;
-      }
-    },
-    [
-      pushToast,
-      setActiveSidebarTab,
-      setAuthRequired,
-      setLastError,
-      withRequestController,
-    ],
-  );
-
   const retry = useCallback(() => {
     reconnectAttemptsRef.current = 0;
     esRef.current?.close();
@@ -449,7 +385,6 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     lastMessage,
     currentConversation,
     sendPayload,
-    sendForm,
     setCurrentConversation,
     subscribeToChat,
     retry,

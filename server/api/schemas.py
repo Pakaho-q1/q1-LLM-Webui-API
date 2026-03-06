@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -51,9 +51,29 @@ class ApiActionRequest(BaseModel):
 OpenAIChatRole = Literal["system", "user", "assistant", "tool"]
 
 
+class OpenAIImageUrl(BaseModel):
+    url: str
+
+
+class OpenAIContentPartText(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+class OpenAIContentPartImage(BaseModel):
+    type: Literal["image_url"]
+    image_url: OpenAIImageUrl
+
+
+OpenAIMessageContent = Union[
+    str,
+    List[Union[OpenAIContentPartText, OpenAIContentPartImage]],
+]
+
+
 class OpenAIChatMessage(BaseModel):
     role: OpenAIChatRole
-    content: str
+    content: OpenAIMessageContent
 
 
 class OpenAIChatCompletionRequest(BaseModel):

@@ -11,9 +11,21 @@ export const API_KEY_STORAGE_KEYS = [
 
 const API_KEY = import.meta.env.VITE_LLM_API_KEY || '';
 
+export interface OpenAIContentPartText {
+  type: 'text';
+  text: string;
+}
+
+export interface OpenAIContentPartImage {
+  type: 'image_url';
+  image_url: {
+    url: string;
+  };
+}
+
 export interface OpenAIChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | (OpenAIContentPartText | OpenAIContentPartImage)[];
 }
 
 export interface OpenAIChatCompletionRequest {
@@ -25,6 +37,15 @@ export interface OpenAIChatCompletionRequest {
   top_p?: number;
   stop?: string | string[];
   [key: string]: unknown;
+}
+
+export interface OpenAIFileObject {
+  id: string;
+  object: 'file';
+  bytes: number;
+  created_at: number;
+  filename: string;
+  purpose: string;
 }
 
 export class ApiError extends Error {
@@ -50,8 +71,8 @@ export const readRuntimeApiKey = (): string => {
   return API_KEY;
 };
 
-export const getApiHeaders = (): HeadersInit => ({
-  'Content-Type': 'application/json',
+export const getApiHeaders = (includeJsonContentType = true): HeadersInit => ({
+  ...(includeJsonContentType ? { 'Content-Type': 'application/json' } : {}),
   ...(readRuntimeApiKey() ? { Authorization: `Bearer ${readRuntimeApiKey()}` } : {}),
 });
 
@@ -88,11 +109,13 @@ export const apiFetch = async <T = unknown>(
   };
   options.signal?.addEventListener('abort', linkedAbort, { once: true });
 
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
   try {
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers: {
-        ...getApiHeaders(),
+        ...getApiHeaders(!isFormData),
         ...(options.headers || {}),
       },
       signal: controller.signal,
@@ -102,7 +125,7 @@ export const apiFetch = async <T = unknown>(
     if (!response.ok) {
       const fromPayload =
         typeof payload === 'object' && payload !== null
-          ? ((payload as any).message || (payload as any).error || (payload as any).detail)
+          ? ((payload as any).message || (payload as any).error?.message || (payload as any).error || (payload as any).detail)
           : payload;
       const message = typeof fromPayload === 'string' && fromPayload.trim()
         ? fromPayload
@@ -115,6 +138,123 @@ export const apiFetch = async <T = unknown>(
     clearTimeout(timeoutId);
     options.signal?.removeEventListener('abort', linkedAbort);
   }
+};
+
+export const uploadOpenAIFile = async (
+  file: File,
+  purpose = 'user_data',
+  signal?: AbortSignal,
+): Promise<OpenAIFileObject> => {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  fd.append('purpose', purpose);
+
+  return apiFetch<OpenAIFileObject>('/v1/files', {
+    method: 'POST',
+    body: fd,
+    signal,
+  });
+};
+
+export const transcribeAudioFile = async (
+  file: Blob | File,
+  model = 'gpt-4o-mini-transcribe',
+  signal?: AbortSignal,
+): Promise<string> => {
+  const fd = new FormData();
+  const actualFile = file instanceof File ? file : new File([file], 'audio.webm', { type: file.type || 'audio/webm' });
+  fd.append('file', actualFile, actualFile.name);
+  fd.append('model', model);
+
+  const payload = await apiFetch<{ text?: string }>('/v1/audio/transcriptions', {
+    method: 'POST',
+    body: fd,
+    signal,
+  });
+
+  return payload?.text || '';
+};
+
+export const fileToDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+
+export const streamOpenAIChatCompletion = async (
+  request: OpenAIChatCompletionRequest,
+  opts: {
+    signal?: AbortSignal;
+    onDelta: (chunk: string) => void;
+    onDone?: () => void;
+  },
+): Promise<void> => {
+  const response = await fetch(`${API_BASE}/v1/chat/completions`, {
+    method: 'POST',
+    headers: getApiHeaders(true),
+    body: JSON.stringify({ ...request, stream: true }),
+    signal: opts.signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const payload = await safeParseResponse(response);
+    const message =
+      typeof payload === 'object' && payload !== null
+        ? ((payload as any).error?.message || (payload as any).message || (payload as any).detail)
+        : payload;
+    throw new ApiError(
+      typeof message === 'string' ? message : `HTTP ${response.status} on /v1/chat/completions`,
+      response.status,
+      '/v1/chat/completions',
+      payload,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || '';
+
+    for (const event of events) {
+      const line = event
+        .split('\n')
+        .map((x) => x.trim())
+        .find((x) => x.startsWith('data:'));
+      if (!line) continue;
+
+      const raw = line.slice(5).trim();
+      if (!raw) continue;
+      if (raw === '[DONE]') {
+        opts.onDone?.();
+        return;
+      }
+
+      try {
+        const payload = JSON.parse(raw);
+        if (payload?.error?.message) {
+          throw new ApiError(payload.error.message, 500, '/v1/chat/completions', payload);
+        }
+
+        const chunk = payload?.choices?.[0]?.delta?.content;
+        if (typeof chunk === 'string' && chunk.length > 0) {
+          opts.onDelta(chunk);
+        }
+      } catch (err) {
+        if (err instanceof ApiError) throw err;
+      }
+    }
+  }
+
+  opts.onDone?.();
 };
 
 export const fetchModels = async (): Promise<ModelItem[]> => {

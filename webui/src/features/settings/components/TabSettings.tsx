@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useSettings as useSettingsContext } from '@/contexts/SettingsContext';
+import { useSettings as useSettingsContext } from '@/services/SettingsContext';
 import { useSettings as usePresetLogic } from '../hooks/useSettings';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Combobox } from '@/components/ui/Combobox';
@@ -196,7 +196,11 @@ export const TabSettings: React.FC = () => {
         confirmVariant="danger"
       >
         <p className="text-[0.875rem] text-[var(--text-secondary)]">
-          Delete preset <strong className="text-[var(--text-primary)]">"{presetToDelete}"</strong>?
+          Delete preset{' '}
+          <strong className="text-[var(--text-primary)]">
+            "{presetToDelete}"
+          </strong>
+          ?
         </p>
       </Modal>
 
@@ -214,7 +218,11 @@ export const TabSettings: React.FC = () => {
         confirmVariant="primary"
       >
         <p className="text-[0.875rem] text-[var(--text-secondary)]">
-          Update <strong className="text-[var(--text-primary)]">"{presetToUpdate}"</strong> with current settings?
+          Update{' '}
+          <strong className="text-[var(--text-primary)]">
+            "{presetToUpdate}"
+          </strong>{' '}
+          with current settings?
         </p>
       </Modal>
 

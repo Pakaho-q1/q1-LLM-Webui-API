@@ -3,7 +3,7 @@ import { Sidebar } from './Sidebar';
 import { ChatContainer } from '@/features/chat/components/ChatContainer';
 import { useModelManager } from '@/features/models/hooks/useModelManager';
 import { useMainLayout } from './hooks/useMainLayout';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettings } from '@/services/SettingsContext';
 import { useSSE } from '@/contexts/SSEContext';
 import { Combobox } from '@/components/ui/Combobox';
 import { Sun, Moon, Menu, ChevronRight, Zap, ZapOff } from 'lucide-react';
@@ -38,15 +38,20 @@ const Spinner = () => (
 
 export const MainLayout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isLoadingAction, setIsLoadingAction] = useState<'load' | 'unload' | null>(null);
+  const [isLoadingAction, setIsLoadingAction] = useState<
+    'load' | 'unload' | null
+  >(null);
   const { dark, toggle } = useTheme();
 
-  const { localModels, isLoadingModels, unloadModel, loadModel } = useModelManager();
+  const { localModels, isLoadingModels, unloadModel, loadModel } =
+    useModelManager();
   const { currentModel, isModelRunning, isModelLoading } = useMainLayout();
   const { settings } = useSettings();
   const { isConnected, connectionState } = useSSE();
 
-  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem(LAST_MODEL_KEY) || '');
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => localStorage.getItem(LAST_MODEL_KEY) || '',
+  );
 
   useEffect(() => {
     if (localModels.length === 0) return;
@@ -89,7 +94,6 @@ export const MainLayout: React.FC = () => {
       setIsLoadingAction(null);
     }
   };
-
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
@@ -150,8 +154,15 @@ export const MainLayout: React.FC = () => {
                     }`}
                   />
                 )}
-                <span className="truncate" title={isModelRunning ? currentModel || 'Running' : undefined}>
-                  {isModelLoading ? 'Loading' : isModelRunning ? currentModel?.split('/').pop() || 'Running' : 'No Model'}
+                <span
+                  className="truncate"
+                  title={isModelRunning ? currentModel || 'Running' : undefined}
+                >
+                  {isModelLoading
+                    ? 'Loading'
+                    : isModelRunning
+                      ? currentModel?.split('/').pop() || 'Running'
+                      : 'No Model'}
                 </span>
               </div>
             </div>
@@ -162,7 +173,10 @@ export const MainLayout: React.FC = () => {
                 options={localModels.map((m) => ({
                   value: m.name,
                   label: (
-                    <span className="text-[0.8rem] text-[var(--text-primary)]" title={m.name}>
+                    <span
+                      className="text-[0.8rem] text-[var(--text-primary)]"
+                      title={m.name}
+                    >
                       {m.name}
                     </span>
                   ),
@@ -176,7 +190,9 @@ export const MainLayout: React.FC = () => {
 
             <button
               onClick={handleLoadModel}
-              disabled={!selectedModel || !isConnected || isLoadingAction !== null}
+              disabled={
+                !selectedModel || !isConnected || isLoadingAction !== null
+              }
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--success)] px-3.5 py-1.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40"
             >
               {isLoadingAction === 'load' ? <Spinner /> : <Zap size={12} />}
@@ -188,11 +204,19 @@ export const MainLayout: React.FC = () => {
               disabled={!isConnected || isLoadingAction !== null}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--danger)] px-3.5 py-1.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {isLoadingAction === 'unload' ? <Spinner /> : <ZapOff size={12} />}
+              {isLoadingAction === 'unload' ? (
+                <Spinner />
+              ) : (
+                <ZapOff size={12} />
+              )}
               Unload
             </button>
 
-            <button onClick={toggle} className="icon-btn shrink-0" title={dark ? 'Light mode' : 'Dark mode'}>
+            <button
+              onClick={toggle}
+              className="icon-btn shrink-0"
+              title={dark ? 'Light mode' : 'Dark mode'}
+            >
               {dark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>

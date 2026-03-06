@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
 import { SSEProvider } from './contexts/SSEContext';
-import { SettingsProvider } from './contexts/SettingsContext';
+import { SettingsProvider } from './services/SettingsContext';
 
 import './index.css';
 

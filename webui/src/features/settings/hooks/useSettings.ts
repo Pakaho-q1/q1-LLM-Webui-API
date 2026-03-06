@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSSE } from '../../../contexts/SSEContext';
-import { useSettings as useSettingsContext } from '../../../contexts/SettingsContext';
+import { useSettings as useSettingsContext } from '../../../services/SettingsContext';
 import { PresetData, PresetListItem } from '../../../types/chat.types';
 
 export const useSettings = () => {

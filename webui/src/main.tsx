@@ -4,7 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
 import { SSEProvider } from './contexts/SSEContext';
+import { FetchProvider } from './contexts/FetchContext';
 import { SettingsProvider } from './services/SettingsContext';
+import { SystemMonitor } from './services/SystemMonitor';
+import { ToastViewport } from './components/ui/ToastViewport';
 
 import './index.css';
 
@@ -25,9 +28,13 @@ ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <SettingsProvider>
-        <SSEProvider>
-          <App />
-        </SSEProvider>
+        <FetchProvider>
+          <SSEProvider>
+            <SystemMonitor />
+            <App />
+            <ToastViewport />
+          </SSEProvider>
+        </FetchProvider>
       </SettingsProvider>
     </QueryClientProvider>
   </React.StrictMode>,

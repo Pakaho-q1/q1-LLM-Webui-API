@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSSE } from '../../../contexts/SSEContext';
 
 interface SessionItem {
   id: string;
   title: string;
   updated_at?: number;
+  isOptimistic?: boolean;
 }
 
 interface HistoryMessage {
@@ -22,6 +23,8 @@ export const useHistory = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  const optimisticCreateIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!lastMessage) return;
 
@@ -33,17 +36,21 @@ export const useHistory = () => {
         setSessions(list);
         setLoading(false);
         setError(null);
-
-        const savedId = localStorage.getItem(LAST_SESSION_KEY);
-        if (savedId && list.some((s) => s.id === savedId)) {
-        }
       } else if (t === 'session_created' && lastMessage.data) {
         const item = lastMessage.data as SessionItem;
 
         setSessions((prev) => {
-          if (prev.some((s) => s.id === item.id)) return prev;
-          return [item, ...prev];
+          const withoutOptimistic = optimisticCreateIdRef.current
+            ? prev.filter((s) => s.id !== optimisticCreateIdRef.current)
+            : prev;
+
+          if (withoutOptimistic.some((s) => s.id === item.id)) {
+            return withoutOptimistic;
+          }
+          return [item, ...withoutOptimistic];
         });
+
+        optimisticCreateIdRef.current = null;
         setLoading(false);
         setCurrentConversation?.(item.id);
         localStorage.setItem(LAST_SESSION_KEY, item.id);
@@ -52,11 +59,12 @@ export const useHistory = () => {
         if (data?.id && data?.title) {
           setSessions((prev) =>
             prev.map((s) =>
-              s.id === data.id ? { ...s, title: data.title } : s,
+              s.id === data.id
+                ? { ...s, title: data.title, isOptimistic: false }
+                : s,
             ),
           );
         }
-        fetchSessions();
         setLoading(false);
       } else if (t === 'session_deleted') {
         const data = lastMessage.data as Record<string, any> | undefined;
@@ -87,13 +95,16 @@ export const useHistory = () => {
       );
       setLoading(false);
     }
-  }, [lastMessage]);
+  }, [lastMessage, setCurrentConversation]);
 
   const fetchSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      await sendPayload({ action: 'list_sessions' });
+      await sendPayload(
+        { action: 'list_sessions' },
+        { requestKey: 'sse:list_sessions', cancelPrevious: true },
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to list sessions');
       setLoading(false);
@@ -104,9 +115,24 @@ export const useHistory = () => {
     async (title = 'New Chat') => {
       setLoading(true);
       setError(null);
+
+      const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      optimisticCreateIdRef.current = optimisticId;
+      setSessions((prev) => [
+        {
+          id: optimisticId,
+          title,
+          updated_at: Math.floor(Date.now() / 1000),
+          isOptimistic: true,
+        },
+        ...prev,
+      ]);
+
       try {
         await sendPayload({ action: 'create_session', title });
       } catch (err) {
+        setSessions((prev) => prev.filter((s) => s.id !== optimisticId));
+        optimisticCreateIdRef.current = null;
         setError(
           err instanceof Error ? err.message : 'Failed to create session',
         );
@@ -121,9 +147,15 @@ export const useHistory = () => {
       setLoading(true);
       setError(null);
 
+      let previousTitle: string | null = null;
       setSessions((prev) =>
-        prev.map((s) => (s.id === conversation_id ? { ...s, title } : s)),
+        prev.map((s) => {
+          if (s.id !== conversation_id) return s;
+          previousTitle = s.title;
+          return { ...s, title, isOptimistic: true };
+        }),
       );
+
       try {
         await sendPayload({ action: 'rename_session', conversation_id, title });
       } catch (err) {
@@ -131,7 +163,17 @@ export const useHistory = () => {
           err instanceof Error ? err.message : 'Failed to rename session',
         );
         setLoading(false);
-        fetchSessions();
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === conversation_id
+              ? {
+                  ...s,
+                  title: previousTitle ?? s.title,
+                  isOptimistic: false,
+                }
+              : s,
+          ),
+        );
       }
     },
     [sendPayload],
@@ -142,10 +184,12 @@ export const useHistory = () => {
       setLoading(true);
       setError(null);
 
+      const snapshot = sessions.find((x) => x.id === conversation_id) || null;
       setSessions((prev) => prev.filter((x) => x.id !== conversation_id));
       if (localStorage.getItem(LAST_SESSION_KEY) === conversation_id) {
         localStorage.removeItem(LAST_SESSION_KEY);
       }
+
       try {
         await sendPayload({ action: 'delete_session', conversation_id });
       } catch (err) {
@@ -153,10 +197,12 @@ export const useHistory = () => {
           err instanceof Error ? err.message : 'Failed to delete session',
         );
         setLoading(false);
-        fetchSessions();
+        if (snapshot) {
+          setSessions((prev) => [snapshot, ...prev]);
+        }
       }
     },
-    [sendPayload],
+    [sendPayload, sessions],
   );
 
   const getChatHistory = useCallback(
@@ -164,7 +210,13 @@ export const useHistory = () => {
       setLoading(true);
       setError(null);
       try {
-        await sendPayload({ action: 'get_chat_history', conversation_id });
+        await sendPayload(
+          { action: 'get_chat_history', conversation_id },
+          {
+            requestKey: `sse:get_chat_history:${conversation_id}`,
+            cancelPrevious: true,
+          },
+        );
         setCurrentConversation?.(conversation_id);
         localStorage.setItem(LAST_SESSION_KEY, conversation_id);
       } catch (err) {
@@ -174,7 +226,7 @@ export const useHistory = () => {
         setLoading(false);
       }
     },
-    [sendPayload],
+    [sendPayload, setCurrentConversation],
   );
 
   return {

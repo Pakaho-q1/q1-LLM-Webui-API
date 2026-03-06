@@ -1,14 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { Tabs, TabItem } from '@/components/ui/Tabs';
 import { TabModels } from '@/features/models/components/TabModels';
 import { TabSettings } from '@/features/settings/components/TabSettings';
 import { ChatHistoryTab } from '@/features/history/components/ChatHistoryTab';
+import { useSystemStore } from '@/services/system.store';
 import { History, Cpu, Settings, X } from 'lucide-react';
 
 type TabType = 'history' | 'settings' | 'models';
 
 export const Sidebar: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const [activeTab, setActiveTab] = useState<TabType>('history');
+  const activeTab = useSystemStore((state) => state.activeSidebarTab);
+  const setActiveTab = useSystemStore((state) => state.setActiveSidebarTab);
 
   const menuTabs: TabItem[] = useMemo(
     () => [

@@ -7,7 +7,8 @@ import React, {
   ReactNode,
   useCallback,
 } from 'react';
-import { WS_URL, API_BASE } from '../services/api.service';
+import { API_BASE, apiFetch as apiRequest, ApiError } from '../services/api.service';
+import { useSystemStore } from '@/services/system.store';
 import { WsResponse } from '../types/chat.types';
 
 enum ConnectionState {
@@ -24,8 +25,15 @@ interface SSEContextType {
   lastMessage: any | null;
   currentConversation: string | null;
 
-  sendPayload: (payload: Record<string, unknown>) => Promise<any>;
-  sendForm: (endpoint: string, formData: FormData) => Promise<any>;
+  sendPayload: (
+    payload: Record<string, unknown>,
+    options?: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number },
+  ) => Promise<any>;
+  sendForm: (
+    endpoint: string,
+    formData: FormData,
+    options?: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number },
+  ) => Promise<any>;
   setCurrentConversation?: (id: string | null) => void;
   subscribeToChat: (callback: (msg: any) => void) => () => void;
   retry: () => void;
@@ -93,8 +101,16 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   );
 
   const esRef = useRef<EventSource | null>(null);
+  const requestControllersRef = useRef(new Map<string, AbortController>());
   const reconnectAttemptsRef = useRef(0);
   const chatListenersRef = useRef<Set<(msg: any) => void>>(new Set());
+  const setModelStatus = useSystemStore((state) => state.setModelStatus);
+  const beginRequest = useSystemStore((state) => state.beginRequest);
+  const endRequest = useSystemStore((state) => state.endRequest);
+  const setLastError = useSystemStore((state) => state.setLastError);
+  const setAuthRequired = useSystemStore((state) => state.setAuthRequired);
+  const setActiveSidebarTab = useSystemStore((state) => state.setActiveSidebarTab);
+  const pushToast = useSystemStore((state) => state.pushToast);
 
   const notifyChatListeners = (data: any) => {
     chatListenersRef.current.forEach((cb) => cb(data));
@@ -192,6 +208,39 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   const processIncoming = (data: any) => {
     setLastMessage(data);
 
+    if (data?.type === 'model_status' && data?.data) {
+      const d = data.data as any;
+      setModelStatus({
+        currentModel: d.name || d.model || '',
+        isModelRunning: Boolean(d.running),
+        isModelLoading:
+          typeof d.loading === 'boolean'
+            ? Boolean(d.loading)
+            : Boolean(d.running) === false && Boolean(d.name || d.model),
+      });
+    }
+
+    if ((data?.type === 'status' || data?.type === 'info') && data?.message) {
+      const lower = String(data.message).toLowerCase();
+      if (lower.includes('loading')) {
+        setModelStatus({ isModelLoading: true });
+      }
+      if (
+        lower.includes('loaded') ||
+        lower.includes('unloaded') ||
+        lower.includes('error')
+      ) {
+        setModelStatus({
+          isModelLoading: false,
+          isModelRunning: lower.includes('loaded')
+            ? true
+            : lower.includes('unloaded')
+              ? false
+              : undefined,
+        });
+      }
+    }
+
     if (data.type === 'session_deleted') {
       setCurrentConversation((prev) =>
         prev === data.conversation_id ? null : prev,
@@ -210,6 +259,46 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     if (data.choices && Array.isArray(data.choices)) notifyChatListeners(data);
   };
 
+  useEffect(
+    () => () => {
+      requestControllersRef.current.forEach((controller) => {
+        controller.abort(new DOMException('Cancelled', 'AbortError'));
+      });
+      requestControllersRef.current.clear();
+    },
+    [],
+  );
+
+  const withRequestController = useCallback(
+    async <T,>(
+      requestKey: string,
+      fn: (signal: AbortSignal) => Promise<T>,
+      cancelPrevious = false,
+    ): Promise<T> => {
+      if (cancelPrevious) {
+        const existing = requestControllersRef.current.get(requestKey);
+        if (existing) {
+          existing.abort(new DOMException('Cancelled by newer request', 'AbortError'));
+          requestControllersRef.current.delete(requestKey);
+        }
+      }
+
+      const controller = new AbortController();
+      requestControllersRef.current.set(requestKey, controller);
+      beginRequest(requestKey);
+
+      try {
+        return await fn(controller.signal);
+      } finally {
+        endRequest(requestKey);
+        if (requestControllersRef.current.get(requestKey) === controller) {
+          requestControllersRef.current.delete(requestKey);
+        }
+      }
+    },
+    [beginRequest, endRequest],
+  );
+
   useEffect(() => {
     connect();
     return () => {
@@ -219,65 +308,131 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   }, [connect]);
 
   const sendPayload = useCallback(
-    async (payload: Record<string, unknown>): Promise<any> => {
+    async (
+      payload: Record<string, unknown>,
+      options: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number } = {},
+    ): Promise<any> => {
       const action = (payload.action as string) || '';
+      const requestKey = options.requestKey || `sse:${action || 'chat'}`;
+      const cancelPrevious = options.cancelPrevious ?? ['fetch_hf', 'list_models', 'get_model_status'].includes(action);
 
       try {
-        if (action === 'chat_completion') {
-          const req: any = {
-            ...payload,
-            stream: true,
-            client_id: CLIENT_ID,
-          };
-          if (!req.request_id) req.request_id = genRequestId();
-          delete req.action;
+        const response = await withRequestController(
+          requestKey,
+          async (signal) => {
+            if (action === 'chat_completion') {
+              const req: any = {
+                ...payload,
+                stream: true,
+                client_id: CLIENT_ID,
+              };
+              if (!req.request_id) req.request_id = genRequestId();
+              delete req.action;
 
-          const resp = await fetch(`${API_BASE}/v1/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(req),
-          });
-          if (!resp.ok)
-            throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-          return resp.json();
+              return apiRequest('/v1/chat/completions', {
+                method: 'POST',
+                body: JSON.stringify(req),
+                signal,
+              }, { timeoutMs: options.timeoutMs });
+            }
+
+            return apiRequest('/api/action', {
+              method: 'POST',
+              body: JSON.stringify({ ...payload, client_id: CLIENT_ID }),
+              signal,
+            }, { timeoutMs: options.timeoutMs });
+          },
+          cancelPrevious,
+        );
+
+        setLastError(null);
+        setAuthRequired(false);
+        return response;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw err;
         }
 
-        const resp = await fetch(`${API_BASE}/api/action`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...payload, client_id: CLIENT_ID }),
-        });
-        return resp.json();
-      } catch (err) {
         const msg = err instanceof Error ? err.message : 'Send failed';
         setError(msg);
+        setLastError(msg);
+        pushToast(msg, 'error', 4500);
+
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthRequired(true);
+          setActiveSidebarTab('settings');
+          pushToast('Unauthorized: please update API key in Settings', 'warning', 6000);
+        }
+
         throw err;
       }
     },
-    [],
+    [
+      pushToast,
+      setActiveSidebarTab,
+      setAuthRequired,
+      setLastError,
+      withRequestController,
+    ],
   );
 
   const sendForm = useCallback(
-    async (endpoint: string, formData: FormData): Promise<any> => {
+    async (
+      endpoint: string,
+      formData: FormData,
+      options: { requestKey?: string; cancelPrevious?: boolean; timeoutMs?: number } = {},
+    ): Promise<any> => {
       formData.set('client_id', CLIENT_ID);
+      const requestKey = options.requestKey || `form:${endpoint}`;
 
       try {
-        const resp = await fetch(`${API_BASE}/api/${endpoint}`, {
-          method: 'POST',
+        const response = await withRequestController(
+          requestKey,
+          async (signal) => {
+            const resp = await fetch(`${API_BASE}/api/${endpoint}`, {
+              method: 'POST',
+              body: formData,
+              signal,
+            });
+            if (!resp.ok) {
+              const payload = await resp.text().catch(() => '');
+              throw new ApiError(payload || `HTTP ${resp.status}: ${resp.statusText}`, resp.status, `/api/${endpoint}`, payload);
+            }
+            return resp.json();
+          },
+          options.cancelPrevious ?? false,
+        );
 
-          body: formData,
-        });
-        if (!resp.ok)
-          throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-        return resp.json();
+        setLastError(null);
+        setAuthRequired(false);
+        return response;
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw err;
+        }
+
         const msg =
           err instanceof Error ? err.message : `sendForm(${endpoint}) failed`;
         setError(msg);
+        setLastError(msg);
+        pushToast(msg, 'error', 4500);
+
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthRequired(true);
+          setActiveSidebarTab('settings');
+          pushToast('Unauthorized: please update API key in Settings', 'warning', 6000);
+        }
+
         throw err;
       }
     },
-    [],
+    [
+      pushToast,
+      setActiveSidebarTab,
+      setAuthRequired,
+      setLastError,
+      withRequestController,
+    ],
   );
 
   const retry = useCallback(() => {

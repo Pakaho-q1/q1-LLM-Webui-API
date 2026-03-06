@@ -8,7 +8,14 @@ export const SystemMonitor: React.FC = () => {
 
   const fetchGlobalStatus = useCallback(async () => {
     try {
-      const data = await apiFetch('/api/models/status');
+      const data = await apiFetch<{ name?: string; model?: string; running?: boolean; loading?: boolean }>(
+        '/api/models/status',
+        {},
+        {
+        requestKey: 'fetch:models_status',
+        cancelPrevious: true,
+        suppressGlobalError: true,
+      });
 
       setStatus({
         currentModel: data.name || data.model || '',

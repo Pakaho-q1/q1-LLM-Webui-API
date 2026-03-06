@@ -32,6 +32,7 @@ export const useChat = () => {
     chatError,
     setMessages,
     pushMessage,
+    removeMessageById,
     appendAssistantChunk,
     setGenerating,
     setChatError,
@@ -126,6 +127,7 @@ export const useChat = () => {
     ) => {
       if ((!text.trim() && !file) || !isConnected || isGenerating) return;
 
+      let userMessageId: string | null = null;
       try {
         setChatError(null);
 
@@ -147,6 +149,7 @@ export const useChat = () => {
           content: text,
           attachments,
         };
+        userMessageId = userMsg.id;
 
         setGenerating(true);
         pushMessage(userMsg);
@@ -164,7 +167,7 @@ export const useChat = () => {
             await sendPayload({
               action: 'create_session',
               title: text.slice(0, 60) || 'New Chat',
-            });
+            }, { requestKey: 'sse:create_session', cancelPrevious: false });
             const start = Date.now();
             while (
               !currentConversationRef.current &&
@@ -203,11 +206,21 @@ export const useChat = () => {
           await sendPayload(payload);
         }
       } catch (err) {
+        if (userMessageId) removeMessageById(userMessageId);
         setChatError(err instanceof Error ? err.message : 'Failed to send');
         setGenerating(false);
       }
     },
-    [isConnected, isGenerating, pushMessage, sendForm, sendPayload, setGenerating, setChatError],
+    [
+      isConnected,
+      isGenerating,
+      pushMessage,
+      removeMessageById,
+      sendForm,
+      sendPayload,
+      setGenerating,
+      setChatError,
+    ],
   );
 
   const clearError = useCallback(() => setChatError(null), [setChatError]);

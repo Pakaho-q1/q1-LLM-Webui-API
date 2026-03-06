@@ -20,6 +20,7 @@ interface ChatStoreState {
   chatError: string | null;
   setMessages: (messages: InternalMessage[]) => void;
   pushMessage: (message: InternalMessage) => void;
+  removeMessageById: (id: string) => void;
   appendAssistantChunk: (chunk: string, id?: string) => void;
   setGenerating: (value: boolean) => void;
   setChatError: (value: string | null) => void;
@@ -36,6 +37,8 @@ export const useChatStore = create<ChatStoreState>((set) => ({
     set((state) => ({
       messages: [...state.messages, message],
     })),
+  removeMessageById: (id) =>
+    set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
   appendAssistantChunk: (chunk, id) =>
     set((state) => {
       const copy = [...state.messages];

@@ -13,7 +13,6 @@ class ChatOrchestrator:
         self.history = history
         self.executor = executor
 
-        self.retrieval_service = retrieval_service
         self._cached_engine = None
         self._is_stream = False
         self._current_engine_id = id(engine)
@@ -47,7 +46,6 @@ class ChatOrchestrator:
 
     def unload_model(self):
         """ล้าง Cache เมื่อปิดหรือเปลี่ยนโมเดล"""
-        self.retrieval_service = retrieval_service
         self._cached_engine = None
         self._is_stream = False
 

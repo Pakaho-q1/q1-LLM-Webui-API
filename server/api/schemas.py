@@ -12,6 +12,7 @@ ActionType = Literal[
     "download_model",
     "cancel_download",
     "download_status",
+    "stop_generation",
     "count_tokens",
     "get_model_status",
     "list_presets",
@@ -47,13 +48,26 @@ class ApiActionRequest(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
-class SSEChatRequest(BaseModel):
-    client_id: str
-    conversation_id: str = "default_conv"
-    content: Optional[str] = None
-    messages: List[Dict[str, Any]] = Field(default_factory=list)
-    params: Dict[str, Any] = Field(default_factory=dict)
+OpenAIChatRole = Literal["system", "user", "assistant", "tool"]
+
+
+class OpenAIChatMessage(BaseModel):
+    role: OpenAIChatRole
+    content: str
+
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str = "local-model"
+    messages: List[OpenAIChatMessage] = Field(default_factory=list)
+    stream: bool = False
+    client_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     request_id: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    stop: Optional[Any] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RAGQueryRequest(BaseModel):

@@ -29,6 +29,7 @@ class ActionService:
             "download_model": self._download_model,
             "cancel_download": self._cancel_download,
             "download_status": self._download_status,
+            "stop_generation": self._stop_generation,
             "count_tokens": self._count_tokens,
             "get_model_status": self._get_model_status,
             "list_presets": self._list_presets,
@@ -160,6 +161,10 @@ class ActionService:
         await self.state.put_sse_message(client_id, {"type": "download_status", "data": jobs_list})
         return {"status": "ok"}
 
+    async def _stop_generation(self, client_id: str, _data: Dict[str, Any], _payload: ApiActionRequest):
+        await self.state.put_sse_message(client_id, {"type": "done", "reason": "stopped_by_user"})
+        return {"status": "ok"}
+
     async def _count_tokens(self, client_id: str, data: Dict[str, Any], _payload: ApiActionRequest):
         text = data.get("text", "")
         loop = asyncio.get_running_loop()
@@ -254,9 +259,19 @@ class ActionService:
     async def _rename_session(self, client_id: str, _data: Dict[str, Any], payload: ApiActionRequest):
         conv_id = payload.conversation_id
         title = payload.title
+        if not conv_id or not title:
+            raise ValueError("conversation_id and title are required")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self.state.executor, self.state.history_manager.rename_session, conv_id, title)
-        await self.state.put_sse_message(client_id, {"type": "session_renamed", "conversation_id": conv_id, "title": title})
+        await self.state.put_sse_message(
+            client_id,
+            {
+                "type": "session_renamed",
+                "conversation_id": conv_id,
+                "title": title,
+                "data": {"id": conv_id, "title": title},
+            },
+        )
 
         sessions = await loop.run_in_executor(self.state.executor, self.state.history_manager.get_all_sessions)
         await self.state.put_sse_message(client_id, {"type": "sessions_list", "data": sessions})
@@ -264,9 +279,14 @@ class ActionService:
 
     async def _delete_session(self, client_id: str, _data: Dict[str, Any], payload: ApiActionRequest):
         conv_id = payload.conversation_id
+        if not conv_id:
+            raise ValueError("conversation_id is required")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self.state.executor, self.state.history_manager.delete_session, conv_id)
-        await self.state.put_sse_message(client_id, {"type": "session_deleted", "conversation_id": conv_id})
+        await self.state.put_sse_message(
+            client_id,
+            {"type": "session_deleted", "conversation_id": conv_id, "data": {"id": conv_id}},
+        )
 
         sessions = await loop.run_in_executor(self.state.executor, self.state.history_manager.get_all_sessions)
         await self.state.put_sse_message(client_id, {"type": "sessions_list", "data": sessions})

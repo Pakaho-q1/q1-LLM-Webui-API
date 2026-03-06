@@ -129,7 +129,7 @@ class ModelManager:
 
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.download_manager = DownloadManager(self.models_dir)
-        print(f"📁 Model Directory is set to: {self.models_dir.resolve()}")
+        print(f"Model directory is set to: {self.models_dir.resolve()}")
 
     def resolve_model_path(self, filename: str) -> Optional[Path]:
         """Resolve model filename to a safe path under models_dir."""

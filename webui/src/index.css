@@ -1,0 +1,353 @@
+@import 'tailwindcss';
+@plugin "@tailwindcss/typography";
+
+:root {
+  /* สีเบื้องต้น (light mode) - เปลี่ยนให้เป็นธรรมชาติ */
+  --bg-base: #f8f9fa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f0f2f5;
+  --bg-overlay: rgba(255, 255, 255, 0.88);
+  --bg-sidebar: #f4f6fb;
+  --bg-header: #e9edf3;
+  --bg-input: #ffffff;
+  --bg-bubble-user: #d1e7ff;
+  --bg-bubble-ai: #f2f5fa;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-code: #1a1d27;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --text-tertiary: #4b5563;
+  --text-bubble-user: #1e40af;
+  --text-bubble-ai: #1f2937;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-subtle: rgba(59, 130, 246, 0.1);
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.28);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+}
+
+/* Dark Mode – เปลี่ยนให้ดูเป็นธรรมชาติ (ไม่เข้มเกินไป) */
+.dark {
+  --bg-base: #0f172a;
+  --bg-surface: #1e293b;
+  --bg-elevated: #2d3748;
+  --bg-overlay: rgba(15, 23, 46, 0.92);
+  --bg-sidebar: #1e293b;
+  --bg-header: rgba(12, 14, 20, 0.94);
+  --bg-input: #2d3748;
+  --bg-bubble-user: #3b82f65c; /* เปลี่ยนเป็นสีน้ำเงินอ่อน + semi-transparent */
+  --bg-bubble-ai: #1e293b; /* AI ใช้พื้นหลังที่เข้ากับ dark mode เหมือนสีเทา */
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-code: #1a1d27;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #e2e8f0;
+  --text-bubble-user: #3b82f6;
+  --text-bubble-ai: #d1d5db;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-subtle: rgba(59, 130, 246, 0.1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.25);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  margin: 0;
+  padding: 0;
+  transition:
+    background 0.3s ease,
+    color 0.3s ease;
+}
+
+@utility custom-scrollbar {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  &::-webkit-scrollbar {
+    width: 5px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 10px;
+    background: var(--scrollbar-thumb);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+}
+
+@utility icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+@utility surface-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+@theme {
+  --animate-fade-in: fadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-slide-up: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-scale-in: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(18px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes scaleIn {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes typingBounce {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.4;
+    }
+    30% {
+      transform: translateY(-5px);
+      opacity: 1;
+    }
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: -200% center;
+    }
+    100% {
+      background-position: 200% center;
+    }
+  }
+  @keyframes pulseDot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.4;
+      transform: scale(0.7);
+    }
+  }
+  @keyframes spinSlow {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: typingBounce 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.progress-bar-animated {
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    #60a5fa 50%,
+    var(--accent) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+
+.cursor-blink::after {
+  content: '▋';
+  animation: blink 0.9s step-end infinite;
+  color: var(--accent);
+  font-size: 0.8em;
+  margin-left: 1px;
+}
+
+input[type='text'],
+input[type='number'],
+textarea,
+select {
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+input[type='text']:focus,
+input[type='number']:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+input[type='text']::placeholder,
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+input:disabled,
+textarea:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.prose {
+  color: var(--text-bubble-ai);
+  max-width: none;
+  line-height: 1.72;
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.prose strong {
+  color: var(--text-primary);
+}
+.prose a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.prose a:hover {
+  text-decoration: underline;
+}
+.prose code:not(pre code) {
+  background: var(--bg-code);
+  color: #e06c75;
+  padding: 0.12em 0.42em;
+  border-radius: 5px;
+  font-size: 0.86em;
+}
+.prose pre {
+  background: var(--bg-code) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.prose blockquote {
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  background: var(--accent-subtle);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  font-style: normal;
+}
+.prose ul > li::marker,
+.prose ol > li::marker {
+  color: var(--text-tertiary);
+}
+.prose hr {
+  border-color: var(--border);
+}
+.prose table {
+  border-color: var(--border);
+  border-collapse: collapse;
+  width: 100%;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--border);
+  padding: 0.6rem 0.9rem;
+}
+.prose thead tr {
+  background: var(--bg-elevated);
+}
+
+/* Shimmer for idle screen logo */
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}

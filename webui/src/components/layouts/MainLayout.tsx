@@ -4,16 +4,9 @@ import { ChatContainer } from '@/features/chat/components/ChatContainer';
 import { useModelManager } from '@/features/models/hooks/useModelManager';
 import { useMainLayout } from './hooks/useMainLayout';
 import { useSettings } from '@/services/SettingsContext';
-import { useSSE } from '@/contexts/SSEContext';
+import { ConnectionState, useSSE } from '@/contexts/SSEContext';
 import { Combobox } from '@/components/ui/Combobox';
 import { Sun, Moon, Menu, ChevronRight, Zap, ZapOff } from 'lucide-react';
-
-enum ConnectionState {
-  DISCONNECTED = 'disconnected',
-  CONNECTING = 'connecting',
-  CONNECTED = 'connected',
-  ERROR = 'error',
-}
 
 const LAST_MODEL_KEY = 'v1_last_selected_model';
 

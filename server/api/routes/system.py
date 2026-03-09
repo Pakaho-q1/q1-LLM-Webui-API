@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from api.dependencies import REQUIRE_API_KEY, verify_api_key
+from api.dependencies import REQUIRE_API_KEY
 from api.runtime import app_state
 
 router = APIRouter()
@@ -33,16 +33,4 @@ async def readiness_check() -> Dict[str, Any]:
         "status": "ready",
         "auth_required": REQUIRE_API_KEY,
         "models_dir": str(app_state.model_manager.models_dir),
-    }
-
-
-@router.get("/api/models/status", dependencies=[Depends(verify_api_key)])
-async def model_status() -> Dict[str, Any]:
-    running = bool(app_state.llm_engine.llm)
-    name = app_state.llm_engine.model_name or ""
-    return {
-        "running": running,
-        "loading": False,
-        "name": name,
-        "model": name,
     }

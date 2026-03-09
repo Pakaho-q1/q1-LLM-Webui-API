@@ -1,39 +1,13 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useSSE } from '../../../contexts/SSEContext';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import { apiFetch } from '@/services/api.service';
 
 const DEBOUNCE_DELAY = 300;
 
 export const useTokenCounter = () => {
-  const { isConnected, sendPayload, lastMessage, error: wsError } = useSSE();
-
   const [tokenCount, setTokenCount] = useState<number>(0);
   const [isCountingTokens, setIsCountingTokens] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!lastMessage) return;
-
-    try {
-      if (
-        lastMessage.type === 'token_count' &&
-        lastMessage.data !== undefined
-      ) {
-        setTokenCount(lastMessage.data as number);
-        setIsCountingTokens(false);
-        setError(null);
-      } else if (
-        lastMessage.type === 'error' &&
-        lastMessage.message?.includes('token')
-      ) {
-        setError(lastMessage.message || 'Token counting failed');
-        setIsCountingTokens(false);
-      }
-    } catch (err) {
-      console.error('❌ Error processing token count:', err);
-      setError(err instanceof Error ? err.message : 'Processing error');
-      setIsCountingTokens(false);
-    }
-  }, [lastMessage]);
+  const lastRequestIdRef = useRef(0);
 
   const countTokens = useMemo(() => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -43,34 +17,39 @@ export const useTokenCounter = () => {
         clearTimeout(timeoutId);
       }
 
-      if (!text.trim() || !isConnected) {
+      if (!text.trim()) {
         setTokenCount(0);
+        setIsCountingTokens(false);
         return;
       }
 
       setIsCountingTokens(true);
       setError(null);
+      const requestId = ++lastRequestIdRef.current;
 
       timeoutId = setTimeout(async () => {
         try {
-          await sendPayload({
-            action: 'count_tokens',
-            text,
+          const res = await apiFetch<{ data?: number }>('/api/tokens/count', {
+            method: 'POST',
+            body: JSON.stringify({ text }),
           });
+          if (requestId !== lastRequestIdRef.current) return;
+          setTokenCount(Number(res?.data || 0));
+          setIsCountingTokens(false);
+          setError(null);
         } catch (err) {
-          console.error('❌ Failed to count tokens:', err);
-          setError(
-            err instanceof Error ? err.message : 'Failed to count tokens',
-          );
+          if (requestId !== lastRequestIdRef.current) return;
+          setError(err instanceof Error ? err.message : 'Failed to count tokens');
           setIsCountingTokens(false);
         }
       }, DEBOUNCE_DELAY);
     };
-  }, [isConnected, sendPayload]);
+  }, []);
 
   const resetTokenCount = useCallback(() => {
     setTokenCount(0);
     setError(null);
+    setIsCountingTokens(false);
   }, []);
 
   const clearError = useCallback(() => {
@@ -80,7 +59,7 @@ export const useTokenCounter = () => {
   return {
     tokenCount,
     isCountingTokens,
-    error: error || wsError,
+    error,
     countTokens,
     resetTokenCount,
     clearError,

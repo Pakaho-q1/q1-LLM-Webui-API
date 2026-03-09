@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useHistory } from '../hooks/useHistory';
 import { Modal } from '@/components/ui/Modal';
+import { useSSE } from '@/contexts/SSEContext';
+import { useChatStore } from '@/features/chat/store/chat.store';
 import {
   Plus,
   Edit2,
@@ -17,21 +19,22 @@ export const ChatHistoryTab: React.FC = () => {
     loading,
     error,
     fetchSessions,
-    createSession,
     renameSession,
     deleteSession,
     getChatHistory,
     lastSessionKey,
   } = useHistory();
+  const { currentConversation, setCurrentConversation } = useSSE();
+  const clearMessages = useChatStore((state) => state.clearMessages);
+  const setMessages = useChatStore((state) => state.setMessages);
 
   const [selected, setSelected] = useState<string | null>(() =>
     localStorage.getItem(lastSessionKey),
   );
-  const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [formTitle, setFormTitle] = useState('');
+  const [formTitle, setFormTitle] = useState('New Chat');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 12;
@@ -49,9 +52,17 @@ export const ChatHistoryTab: React.FC = () => {
     const savedId = localStorage.getItem(lastSessionKey);
     if (savedId && sessions.some((s) => s.id === savedId) && !selected) {
       setSelected(savedId);
-      getChatHistory(savedId);
+      getChatHistory(savedId).then((history) => {
+        setMessages(
+          history.map((m, idx) => ({
+            id: `hist-${savedId}-${idx}`,
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: m.content,
+          })),
+        );
+      });
     }
-  }, [sessions, getChatHistory, lastSessionKey, selected]);
+  }, [sessions, getChatHistory, lastSessionKey, selected, setMessages]);
 
   useEffect(() => {
     if (
@@ -62,6 +73,12 @@ export const ChatHistoryTab: React.FC = () => {
       setSelected(null);
     }
   }, [sessions, selected]);
+
+  useEffect(() => {
+    if (!currentConversation) return;
+    if (sessions.some((s) => s.id === currentConversation)) return;
+    fetchSessions();
+  }, [currentConversation, sessions, fetchSessions]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return sessions;
@@ -75,14 +92,21 @@ export const ChatHistoryTab: React.FC = () => {
 
   const handleSelect = async (id: string) => {
     setSelected(id);
-    await getChatHistory(id);
+    const history = await getChatHistory(id);
+    setMessages(
+      history.map((m, idx) => ({
+        id: `hist-${id}-${idx}`,
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: m.content,
+      })),
+    );
   };
 
-  const handleCreate = async () => {
-    if (!formTitle.trim()) return;
-    setCreateOpen(false);
-    await createSession(formTitle.trim());
-    setFormTitle('');
+  const handleNewChat = () => {
+    setSelected(null);
+    setCurrentConversation?.(null);
+    clearMessages();
+    localStorage.removeItem(lastSessionKey);
   };
 
   const handleRename = async () => {
@@ -90,13 +114,18 @@ export const ChatHistoryTab: React.FC = () => {
     setRenameOpen(false);
     await renameSession(pendingId, formTitle.trim());
     setPendingId(null);
-    setFormTitle('');
+    setFormTitle('New Chat');
   };
 
   const handleDelete = async () => {
     if (!pendingId) return;
     setDeleteOpen(false);
-    if (selected === pendingId) setSelected(null);
+    if (selected === pendingId) {
+      setSelected(null);
+      clearMessages();
+      setCurrentConversation?.(null);
+      localStorage.removeItem(lastSessionKey);
+    }
     await deleteSession(pendingId);
     setPendingId(null);
   };
@@ -113,10 +142,7 @@ export const ChatHistoryTab: React.FC = () => {
             : `${filtered.length} Session${filtered.length !== 1 ? 's' : ''}`}
         </span>
         <button
-          onClick={() => {
-            setFormTitle('New Chat');
-            setCreateOpen(true);
-          }}
+          onClick={handleNewChat}
           className="flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[0.78rem] font-semibold text-white shadow-[0_1px_4px_color-mix(in_srgb,var(--accent)_35%,transparent)] transition hover:opacity-90"
         >
           <Plus size={13} /> New Chat
@@ -129,20 +155,22 @@ export const ChatHistoryTab: React.FC = () => {
           className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
         />
         <input
-          placeholder="Search sessions…"
+          placeholder="Search sessions..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className={`${inputClassName} pl-[30px]`}
         />
       </div>
 
-      {error && <div className="py-1 text-[0.8rem] text-[var(--danger)]">{error}</div>}
+      {error && (
+        <div className="py-1 text-[0.8rem] text-[var(--danger)]">{error}</div>
+      )}
 
       <div className="flex flex-col gap-0.5">
         {loading && sessions.length === 0 ? (
           <div className="flex items-center gap-2 py-4 text-[0.83rem] text-[var(--text-tertiary)]">
             <span className="inline-block h-3.5 w-3.5 animate-[spinSlow_1s_linear_infinite] rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-            Loading…
+            Loading...
           </div>
         ) : paged.length === 0 ? (
           <div className="py-5 text-center text-[0.83rem] text-[var(--text-tertiary)]">
@@ -151,7 +179,6 @@ export const ChatHistoryTab: React.FC = () => {
         ) : (
           paged.map((s) => {
             const isActive = selected === s.id;
-
             return (
               <div
                 key={s.id}
@@ -164,9 +191,10 @@ export const ChatHistoryTab: React.FC = () => {
               >
                 <MessageSquare
                   size={13}
-                  className={`mr-2 shrink-0 ${isActive ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'}`}
+                  className={`mr-2 shrink-0 ${
+                    isActive ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'
+                  }`}
                 />
-
                 <div className="min-w-0 flex-1">
                   <div
                     className={`truncate text-[0.84rem] ${
@@ -251,29 +279,6 @@ export const ChatHistoryTab: React.FC = () => {
           </div>
         </div>
       )}
-
-      <Modal
-        isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onConfirm={handleCreate}
-        title="New Chat"
-        confirmText="Create"
-        confirmVariant="primary"
-      >
-        <div>
-          <label className="mb-1.5 block text-[0.8rem] font-medium text-[var(--text-secondary)]">
-            Chat Title
-          </label>
-          <input
-            value={formTitle}
-            onChange={(e) => setFormTitle(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            autoFocus
-            className={inputClassName}
-            placeholder="Enter a title…"
-          />
-        </div>
-      </Modal>
 
       <Modal
         isOpen={renameOpen}

@@ -1,11 +1,13 @@
 import { useCallback, useRef } from 'react';
 import {
+  apiFetch,
   fileToDataUrl,
   OpenAIChatMessage,
   streamOpenAIChatCompletion,
   transcribeAudioFile,
   uploadOpenAIFile,
 } from '@/services/api.service';
+import { useSSE } from '@/contexts/SSEContext';
 import {
   Attachment,
   InternalMessage,
@@ -18,7 +20,9 @@ const toOpenAIMessage = (message: InternalMessage): OpenAIChatMessage => ({
 });
 
 export const useChat = () => {
+  const DEFAULT_NEW_SESSION_TITLE = 'New Chat';
   const streamAbortRef = useRef<AbortController | null>(null);
+  const { currentConversation, setCurrentConversation } = useSSE();
 
   const {
     messages,
@@ -35,6 +39,12 @@ export const useChat = () => {
 
   const idRef = useRef(0);
   const createId = () => `msg-${Date.now()}-${idRef.current++}`;
+  const buildTitleFromFirstSentence = (text: string): string => {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (!clean) return 'New Chat';
+    const sentence = clean.split(/[.!?]\s+/)[0] || clean;
+    return sentence.slice(0, 80).trim() || 'New Chat';
+  };
 
   const stopGeneration = useCallback(async () => {
     streamAbortRef.current?.abort();
@@ -55,8 +65,30 @@ export const useChat = () => {
       if ((!text.trim() && files.length === 0) || isGenerating) return;
 
       let userMessageId: string | null = null;
+      let shouldAutoRenameAfterSuccess = false;
+      let pendingAutoTitle = '';
       try {
         setChatError(null);
+        let conversationId = currentConversation;
+
+        if (!conversationId) {
+          // Create with a neutral title first. First auto-rename is applied only
+          // after the first successful backend response to keep state consistent.
+          pendingAutoTitle = buildTitleFromFirstSentence(text);
+          const created = await apiFetch<{ data?: { id?: string } }>('/sessions', {
+            method: 'POST',
+            body: JSON.stringify({ title: DEFAULT_NEW_SESSION_TITLE }),
+          });
+          conversationId = created?.data?.id || null;
+          if (!conversationId) {
+            throw new Error('Failed to create new chat session');
+          }
+          shouldAutoRenameAfterSuccess =
+            pendingAutoTitle.length > 0 &&
+            pendingAutoTitle !== DEFAULT_NEW_SESSION_TITLE;
+          setCurrentConversation?.(conversationId);
+          localStorage.setItem('v1_last_session_id', conversationId);
+        }
 
         const attachments: Attachment[] | undefined =
           files.length > 0
@@ -144,6 +176,7 @@ export const useChat = () => {
             model,
             messages: history,
             stream: true,
+            conversation_id: conversationId,
             ...params,
           },
           {
@@ -156,6 +189,13 @@ export const useChat = () => {
             },
           },
         );
+
+        if (shouldAutoRenameAfterSuccess && conversationId) {
+          await apiFetch(`/sessions/${encodeURIComponent(conversationId)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ title: pendingAutoTitle }),
+          });
+        }
       } catch (err) {
         if (userMessageId) removeMessageById(userMessageId);
         setChatError(err instanceof Error ? err.message : 'Failed to send');
@@ -165,9 +205,12 @@ export const useChat = () => {
     },
     [
       appendAssistantChunk,
+      currentConversation,
       isGenerating,
       pushMessage,
       removeMessageById,
+      setCurrentConversation,
+      DEFAULT_NEW_SESSION_TITLE,
       setGenerating,
       setChatError,
       stopAssistantTyping,

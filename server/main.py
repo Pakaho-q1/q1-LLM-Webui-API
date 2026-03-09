@@ -9,8 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.dependencies import ensure_auth_configuration
-from api.routes.actions import router as actions_router
+from api.routes.models import router as models_router
 from api.routes.openai import router as openai_router
+from api.routes.presets import router as presets_router
 from api.routes.rag import router as rag_router
 from api.routes.sessions import router as sessions_router
 from api.routes.sse import router as sse_router
@@ -148,7 +149,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(system_router)
 app.include_router(sessions_router)
-app.include_router(actions_router)
+app.include_router(models_router)
+app.include_router(presets_router)
 app.include_router(openai_router)
 app.include_router(sse_router)
 app.include_router(rag_router)

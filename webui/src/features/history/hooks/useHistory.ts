@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { apiFetch } from '@/services/api.service';
 import { useSSE } from '../../../contexts/SSEContext';
 
 interface SessionItem {
@@ -16,7 +17,7 @@ interface HistoryMessage {
 const LAST_SESSION_KEY = 'v1_last_session_id';
 
 export const useHistory = () => {
-  const { sendPayload, lastMessage, setCurrentConversation } = useSSE();
+  const { setCurrentConversation } = useSSE();
 
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [currentHistory, setCurrentHistory] = useState<HistoryMessage[]>([]);
@@ -25,91 +26,20 @@ export const useHistory = () => {
 
   const optimisticCreateIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!lastMessage) return;
-
-    try {
-      const t = lastMessage.type;
-
-      if (t === 'sessions_list' && Array.isArray(lastMessage.data)) {
-        const list = lastMessage.data as SessionItem[];
-        setSessions(list);
-        setLoading(false);
-        setError(null);
-      } else if (t === 'session_created' && lastMessage.data) {
-        const item = lastMessage.data as SessionItem;
-
-        setSessions((prev) => {
-          const withoutOptimistic = optimisticCreateIdRef.current
-            ? prev.filter((s) => s.id !== optimisticCreateIdRef.current)
-            : prev;
-
-          if (withoutOptimistic.some((s) => s.id === item.id)) {
-            return withoutOptimistic;
-          }
-          return [item, ...withoutOptimistic];
-        });
-
-        optimisticCreateIdRef.current = null;
-        setLoading(false);
-        setCurrentConversation?.(item.id);
-        localStorage.setItem(LAST_SESSION_KEY, item.id);
-      } else if (t === 'session_renamed') {
-        const data = lastMessage.data as any;
-        if (data?.id && data?.title) {
-          setSessions((prev) =>
-            prev.map((s) =>
-              s.id === data.id
-                ? { ...s, title: data.title, isOptimistic: false }
-                : s,
-            ),
-          );
-        }
-        setLoading(false);
-      } else if (t === 'session_deleted') {
-        const data = lastMessage.data as Record<string, any> | undefined;
-        const convId =
-          lastMessage.conversation_id || data?.id || data?.conversation_id;
-        if (convId) {
-          setSessions((prev) => prev.filter((x) => x.id !== convId));
-
-          if (localStorage.getItem(LAST_SESSION_KEY) === convId) {
-            localStorage.removeItem(LAST_SESSION_KEY);
-          }
-        }
-        setLoading(false);
-      } else if (t === 'chat_history' && lastMessage.conversation_id) {
-        setCurrentHistory(lastMessage.data as HistoryMessage[]);
-        setLoading(false);
-        setCurrentConversation?.(lastMessage.conversation_id as string);
-        localStorage.setItem(
-          LAST_SESSION_KEY,
-          lastMessage.conversation_id as string,
-        );
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Processing history message failed',
-      );
-      setLoading(false);
-    }
-  }, [lastMessage, setCurrentConversation]);
-
   const fetchSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      await sendPayload(
-        { action: 'list_sessions' },
-        { requestKey: 'sse:list_sessions', cancelPrevious: true },
-      );
+      const res = await apiFetch<{ data?: SessionItem[] }>('/sessions', {
+        method: 'GET',
+      });
+      setSessions(Array.isArray(res?.data) ? res.data : []);
+      setLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to list sessions');
       setLoading(false);
     }
-  }, [sendPayload]);
+  }, []);
 
   const createSession = useCallback(
     async (title = 'New Chat') => {
@@ -129,7 +59,25 @@ export const useHistory = () => {
       ]);
 
       try {
-        await sendPayload({ action: 'create_session', title });
+        const res = await apiFetch<{ data?: SessionItem }>('/sessions', {
+          method: 'POST',
+          body: JSON.stringify({ title }),
+        });
+        const item = res?.data;
+        if (!item?.id) {
+          throw new Error('Invalid session response');
+        }
+        setSessions((prev) => {
+          const withoutOptimistic = optimisticCreateIdRef.current
+            ? prev.filter((s) => s.id !== optimisticCreateIdRef.current)
+            : prev;
+          if (withoutOptimistic.some((s) => s.id === item.id)) return withoutOptimistic;
+          return [item, ...withoutOptimistic];
+        });
+        optimisticCreateIdRef.current = null;
+        setCurrentConversation?.(item.id);
+        localStorage.setItem(LAST_SESSION_KEY, item.id);
+        setLoading(false);
       } catch (err) {
         setSessions((prev) => prev.filter((s) => s.id !== optimisticId));
         optimisticCreateIdRef.current = null;
@@ -139,7 +87,7 @@ export const useHistory = () => {
         setLoading(false);
       }
     },
-    [sendPayload],
+    [setCurrentConversation],
   );
 
   const renameSession = useCallback(
@@ -157,7 +105,18 @@ export const useHistory = () => {
       );
 
       try {
-        await sendPayload({ action: 'rename_session', conversation_id, title });
+        await apiFetch(`/sessions/${encodeURIComponent(conversation_id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ title }),
+        });
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === conversation_id
+              ? { ...s, title, isOptimistic: false }
+              : s,
+          ),
+        );
+        setLoading(false);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : 'Failed to rename session',
@@ -176,7 +135,7 @@ export const useHistory = () => {
         );
       }
     },
-    [sendPayload],
+    [],
   );
 
   const deleteSession = useCallback(
@@ -191,7 +150,10 @@ export const useHistory = () => {
       }
 
       try {
-        await sendPayload({ action: 'delete_session', conversation_id });
+        await apiFetch(`/sessions/${encodeURIComponent(conversation_id)}`, {
+          method: 'DELETE',
+        });
+        setLoading(false);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : 'Failed to delete session',
@@ -202,31 +164,33 @@ export const useHistory = () => {
         }
       }
     },
-    [sendPayload, sessions],
+    [sessions],
   );
 
   const getChatHistory = useCallback(
-    async (conversation_id: string) => {
+    async (conversation_id: string): Promise<HistoryMessage[]> => {
       setLoading(true);
       setError(null);
       try {
-        await sendPayload(
-          { action: 'get_chat_history', conversation_id },
-          {
-            requestKey: `sse:get_chat_history:${conversation_id}`,
-            cancelPrevious: true,
-          },
+        const res = await apiFetch<{ data?: HistoryMessage[] }>(
+          `/history/${encodeURIComponent(conversation_id)}`,
+          { method: 'GET' },
         );
+        const history = Array.isArray(res?.data) ? res.data : [];
+        setCurrentHistory(history);
         setCurrentConversation?.(conversation_id);
         localStorage.setItem(LAST_SESSION_KEY, conversation_id);
+        setLoading(false);
+        return history;
       } catch (err) {
         setError(
           err instanceof Error ? err.message : 'Failed to get chat history',
         );
         setLoading(false);
+        return [];
       }
     },
-    [sendPayload, setCurrentConversation],
+    [setCurrentConversation],
   );
 
   return {

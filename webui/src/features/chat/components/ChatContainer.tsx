@@ -132,17 +132,25 @@ export const ChatContainer: React.FC = () => {
         </div>
       )}
 
-      <ChatMessagesGemini
-        messages={messages.map((m) => ({
-          id: undefined,
-          role: m.role as any,
-          content: m.content as string,
-          attachments: (m as any).attachments,
-          isTyping: (m as any).isTyping,
-        }))}
-        onEdit={handleEdit}
-        onRetry={handleRetry}
-      />
+      {/* 🟢 จุดที่แก้ไข: เช็กว่าถ้าแชทว่าง (ไม่มี messages) ให้โชว์ IdleScreen */}
+      {messages.length === 0 ? (
+        <div className="flex-1 overflow-y-auto">
+          {/* ส่งค่าจาก Quick Prompt ไปที่ Input Box ด้านล่าง */}
+          <IdleScreen onQuickPrompt={(text) => setEditText(text)} />
+        </div>
+      ) : (
+        <ChatMessagesGemini
+          messages={messages.map((m) => ({
+            id: undefined,
+            role: m.role as any,
+            content: m.content as string,
+            attachments: (m as any).attachments,
+            isTyping: (m as any).isTyping,
+          }))}
+          onEdit={handleEdit}
+          onRetry={handleRetry}
+        />
+      )}
 
       <ChatInputGemini
         onSend={(text, files) => handleSendMessage(text, files)}

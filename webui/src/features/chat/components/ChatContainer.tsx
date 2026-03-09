@@ -132,10 +132,8 @@ export const ChatContainer: React.FC = () => {
         </div>
       )}
 
-      {/* 🟢 จุดที่แก้ไข: เช็กว่าถ้าแชทว่าง (ไม่มี messages) ให้โชว์ IdleScreen */}
       {messages.length === 0 ? (
         <div className="flex-1 overflow-y-auto">
-          {/* ส่งค่าจาก Quick Prompt ไปที่ Input Box ด้านล่าง */}
           <IdleScreen onQuickPrompt={(text) => setEditText(text)} />
         </div>
       ) : (

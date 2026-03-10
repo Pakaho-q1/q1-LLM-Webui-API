@@ -1,13 +1,20 @@
-'use client';
-import React, { useEffect, useId, useRef, useState } from 'react';
-import mermaid from 'mermaid';
-import { transformMermaid } from './index.js';
-import { isMermaidStreaming, hasMermaidBlock } from './index.js';
+"use client";
+import React, { useEffect, useId, useRef, useState } from "react";
+import mermaid from "mermaid";
+import {
+  transformMermaid,
+  isMermaidStreaming,
+  hasMermaidBlock,
+} from "./index.js";
+import {
+  StreamingTimeoutTracker,
+  getStreamingPartial,
+} from "./core/streaming.js";
 
 mermaid.initialize({
   startOnLoad: false,
-  theme: 'dark',
-  securityLevel: 'strict',
+  theme: "dark",
+  securityLevel: "strict",
   suppressErrorRendering: true,
 });
 
@@ -48,17 +55,45 @@ class LRUCache<K, V> {
 const svgCache = new LRUCache<string, string>(100);
 
 function useMermaid(chart: string, id: string) {
-  const [svg, setSvg] = useState('');
+  const [svg, setSvg] = useState("");
   const [error, setError] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0);
 
+  const trackerRef = useRef(new StreamingTimeoutTracker(10_000));
+  const [streamingTimedOut, setStreamingTimedOut] = useState(false);
+
   const isStreaming = isMermaidStreaming(chart);
 
   useEffect(() => {
-    if (!chart || isStreaming) return;
+    if (isStreaming) {
+      trackerRef.current.start();
 
-    const finalCode = transformMermaid(chart);
+      const intervalId = setInterval(() => {
+        if (trackerRef.current.isTimedOut()) {
+          setStreamingTimedOut(true);
+          clearInterval(intervalId);
+        }
+      }, 1_000);
+
+      return () => clearInterval(intervalId);
+    } else {
+      trackerRef.current.reset();
+      setStreamingTimedOut(false);
+    }
+  }, [isStreaming]);
+
+  useEffect(() => {
+    const shouldRenderPartial = isStreaming && streamingTimedOut;
+    const codeToRender = shouldRenderPartial
+      ? getStreamingPartial(chart)
+      : chart;
+
+    if (!codeToRender) return;
+
+    if (isStreaming && !streamingTimedOut) return;
+
+    const finalCode = transformMermaid(codeToRender);
     if (!finalCode) return;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -81,7 +116,7 @@ function useMermaid(chart: string, id: string) {
         setSvg(svg);
       } catch (err) {
         if (requestIdRef.current !== currentId) return;
-        console.error('Mermaid render error:', err);
+        console.error("Mermaid render error:", err);
         setError(true);
       }
     }
@@ -89,9 +124,9 @@ function useMermaid(chart: string, id: string) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [chart, id, isStreaming]);
+  }, [chart, id, isStreaming, streamingTimedOut]);
 
-  return { svg, error, isStreaming };
+  return { svg, error, isStreaming, streamingTimedOut };
 }
 
 interface Props {
@@ -100,12 +135,31 @@ interface Props {
 
 export const MermaidDiagram: React.FC<Props> = ({ chart }) => {
   const rawId = useId();
-  const safeId = `mermaid-${rawId.replace(/:/g, '')}`;
-  const { svg, error, isStreaming } = useMermaid(chart, safeId);
+  const safeId = `mermaid-${rawId.replace(/:/g, "")}`;
+  const { svg, error, isStreaming, streamingTimedOut } = useMermaid(
+    chart,
+    safeId,
+  );
 
   if (!chart) return null;
 
-  if (isStreaming || (!svg && !error)) {
+  if (isStreaming && !streamingTimedOut) {
+    return (
+      <div className="animate-pulse text-slate-400 text-sm my-3">
+        Rendering diagram...
+      </div>
+    );
+  }
+
+  if (isStreaming && streamingTimedOut && !svg && !error) {
+    return (
+      <div className="text-yellow-400 text-sm my-3">
+        ⏳ Diagram generation timed out — attempting partial render...
+      </div>
+    );
+  }
+
+  if (!svg && !error) {
     return (
       <div className="animate-pulse text-slate-400 text-sm my-3">
         Rendering diagram...

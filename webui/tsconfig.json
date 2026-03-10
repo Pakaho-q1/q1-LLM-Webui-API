@@ -2,7 +2,8 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler", // เปลี่ยนจาก node เป็น bundler สำหรับ Vite
+    "lib": ["DOM", "DOM.Iterable", "ESNext"], // จำเป็นสำหรับ React/Web
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
@@ -10,7 +11,12 @@
     "jsx": "react-jsx",
     "allowJs": true,
     "skipLibCheck": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "strict": true, // เปิดโหมดเข้มงวด เพื่อความปลอดภัยของโค้ด
+    "noUnusedLocals": true, // แจ้งเตือนถ้ามีตัวแปรที่ไม่ได้ใช้
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true
   },
   "include": ["src"]
 }

@@ -41,7 +41,10 @@ export const ChatHistoryTab: React.FC = () => {
   const [page, setPage] = useState(1);
   const pageSize = 12;
 
-  const mapHistoryToInternalMessages = (history: any[], conversationId: string) =>
+  const mapHistoryToInternalMessages = (
+    history: any[],
+    conversationId: string,
+  ) =>
     history.map((m, idx) => {
       const runtimeKey = readRuntimeApiKey();
       const attachments: Attachment[] = Array.isArray(m?.metadata?.attachments)
@@ -56,9 +59,10 @@ export const ChatHistoryTab: React.FC = () => {
                     : '';
               if (!baseUrl) return null;
               const hasApiKey = baseUrl.includes('api_key=');
-              const url = runtimeKey && !hasApiKey
-                ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(runtimeKey)}`
-                : baseUrl;
+              const url =
+                runtimeKey && !hasApiKey
+                  ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(runtimeKey)}`
+                  : baseUrl;
               return {
                 url,
                 type: String(a?.type || 'application/octet-stream'),
@@ -170,7 +174,7 @@ export const ChatHistoryTab: React.FC = () => {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="mb-0.5 flex items-center justify-between">
-        <span className="text-[0.78rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
+        <span className="text-[0.78rem] font-semibold tracking-[0.06em] text-[var(--text-tertiary)] uppercase">
           {loading
             ? '...'
             : `${filtered.length} Session${filtered.length !== 1 ? 's' : ''}`}
@@ -186,7 +190,7 @@ export const ChatHistoryTab: React.FC = () => {
       <div className="relative">
         <Search
           size={13}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
+          className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-[var(--text-tertiary)]"
         />
         <input
           placeholder="Search sessions..."
@@ -217,7 +221,7 @@ export const ChatHistoryTab: React.FC = () => {
               <div
                 key={s.id}
                 onClick={() => handleSelect(s.id)}
-                className={`group flex cursor-pointer items-center rounded-[10px] border px-2.5 py-[9px] transition animate-[fadeIn_0.2s_both] ${
+                className={`group flex animate-[fadeIn_0.2s_both] cursor-pointer items-center rounded-[10px] border px-2.5 py-[9px] transition ${
                   isActive
                     ? 'border-[color-mix(in_srgb,var(--accent)_28%,transparent)] bg-[var(--accent-subtle)]'
                     : 'border-transparent hover:bg-[var(--bg-hover)]'
@@ -226,7 +230,9 @@ export const ChatHistoryTab: React.FC = () => {
                 <MessageSquare
                   size={13}
                   className={`mr-2 shrink-0 ${
-                    isActive ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'
+                    isActive
+                      ? 'text-[var(--accent)]'
+                      : 'text-[var(--text-tertiary)]'
                   }`}
                 />
                 <div className="min-w-0 flex-1">

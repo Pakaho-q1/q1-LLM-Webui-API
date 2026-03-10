@@ -45,12 +45,12 @@ const IdleScreen: React.FC<{ onQuickPrompt: (t: string) => void }> = ({
       What can I help you with?
     </h1>
 
-    <p className="mb-9 mt-2.5 max-w-[380px] animate-[fadeIn_0.5s_0.14s_both] text-center text-[0.9rem] leading-6 text-[var(--text-secondary)]">
+    <p className="mt-2.5 mb-9 max-w-[380px] animate-[fadeIn_0.5s_0.14s_both] text-center text-[0.9rem] leading-6 text-[var(--text-secondary)]">
       Start a new chat or select a conversation from the sidebar. You can also
       type below to begin.
     </p>
 
-    <div className="grid w-full max-w-[460px] grid-cols-2 gap-2.5 animate-[fadeIn_0.5s_0.2s_both]">
+    <div className="grid w-full max-w-[460px] animate-[fadeIn_0.5s_0.2s_both] grid-cols-2 gap-2.5">
       {QUICK_PROMPTS.map((p, i) => (
         <button
           key={i}

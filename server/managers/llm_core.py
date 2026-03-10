@@ -9,7 +9,9 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import requests
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +25,9 @@ class LLMEngine:
     """
 
     def __init__(self):
-        self.backend = (os.environ.get("LLM_ENGINE_BACKEND") or "llama_server").strip().lower()
+        self.backend = (
+            (os.environ.get("LLM_ENGINE_BACKEND") or "llama_server").strip().lower()
+        )
         if self.backend not in {"llama_server", "python_binding"}:
             self.backend = "llama_server"
 
@@ -41,7 +45,9 @@ class LLMEngine:
         self._server_port = int(os.environ.get("LLAMA_SERVER_PORT", "8080"))
         self._server_base_url = f"http://{self._server_host}:{self._server_port}"
         self._server_bin = self._resolve_server_bin()
-        self._server_start_timeout = int(os.environ.get("LLAMA_SERVER_START_TIMEOUT", "90"))
+        self._server_start_timeout = int(
+            os.environ.get("LLAMA_SERVER_START_TIMEOUT", "90")
+        )
 
     def _resolve_server_bin(self) -> str:
         explicit = (os.environ.get("LLAMA_SERVER_BIN") or "").strip()
@@ -49,7 +55,7 @@ class LLMEngine:
             return explicit
 
         server_root = Path(__file__).resolve().parent.parent
-        bundled = server_root / "llama-b8252-bin-win-cuda-12.4-x64" / "llama-server.exe"
+        bundled = server_root / "llama_cpp" / "llama-server.exe"
         if bundled.exists():
             return str(bundled)
 
@@ -85,7 +91,11 @@ class LLMEngine:
 
     def is_loaded(self) -> bool:
         if self.backend == "llama_server":
-            return self._server_process is not None and self._server_process.poll() is None and bool(self.model_name)
+            return (
+                self._server_process is not None
+                and self._server_process.poll() is None
+                and bool(self.model_name)
+            )
         return self.llm is not None
 
     def _wait_server_ready(self) -> Tuple[bool, str]:
@@ -96,7 +106,10 @@ class LLMEngine:
             if self._server_process is None:
                 return False, "llama-server process missing"
             if self._server_process.poll() is not None:
-                return False, f"llama-server exited early with code {self._server_process.returncode}"
+                return (
+                    False,
+                    f"llama-server exited early with code {self._server_process.returncode}",
+                )
 
             try:
                 # Prefer OpenAI-compatible model listing for readiness.
@@ -111,7 +124,9 @@ class LLMEngine:
 
         return False, f"Timeout waiting llama-server ready: {last_err}"
 
-    def _start_llama_server(self, model_path: str, mmproj_path: str, params: Dict[str, Any]) -> Tuple[bool, str]:
+    def _start_llama_server(
+        self, model_path: str, mmproj_path: str, params: Dict[str, Any]
+    ) -> Tuple[bool, str]:
         n_ctx = int(params.get("n_ctx", 4096))
         n_threads = int(params.get("n_threads", 4))
         n_batch = int(params.get("n_batch", 512))
@@ -141,7 +156,9 @@ class LLMEngine:
 
         # Keep startup conservative for production reliability.
         if "flash_attn" in params:
-            cmd.extend(["--flash-attn", "on" if bool(params.get("flash_attn")) else "off"])
+            cmd.extend(
+                ["--flash-attn", "on" if bool(params.get("flash_attn")) else "off"]
+            )
 
         try:
             self._server_process = subprocess.Popen(
@@ -181,7 +198,13 @@ class LLMEngine:
             except Exception:
                 pass
 
-    def _load_python_binding(self, model_path: str, mmproj_path: str, chat_format: str, params: Dict[str, Any]) -> Tuple[bool, str]:
+    def _load_python_binding(
+        self,
+        model_path: str,
+        mmproj_path: str,
+        chat_format: str,
+        params: Dict[str, Any],
+    ) -> Tuple[bool, str]:
         try:
             from llama_cpp import Llama
             from llama_cpp.llama_chat_format import (
@@ -210,11 +233,17 @@ class LLMEngine:
         if mmproj_path:
             hint = (chat_format or "").strip().lower()
             if hint in {"nanollava", "nano_llava"}:
-                llm_kwargs["chat_handler"] = NanoLlavaChatHandler(clip_model_path=mmproj_path)
+                llm_kwargs["chat_handler"] = NanoLlavaChatHandler(
+                    clip_model_path=mmproj_path
+                )
             elif hint in {"moondream"}:
-                llm_kwargs["chat_handler"] = MoondreamChatHandler(clip_model_path=mmproj_path)
+                llm_kwargs["chat_handler"] = MoondreamChatHandler(
+                    clip_model_path=mmproj_path
+                )
             else:
-                llm_kwargs["chat_handler"] = Llava15ChatHandler(clip_model_path=mmproj_path)
+                llm_kwargs["chat_handler"] = Llava15ChatHandler(
+                    clip_model_path=mmproj_path
+                )
 
         for bool_key, default in [
             ("f16_kv", True),
@@ -252,11 +281,15 @@ class LLMEngine:
             self.n_ctx = int(params.get("n_ctx", 4096))
 
             if self.backend == "llama_server":
-                success, reason = self._start_llama_server(model_path, mmproj_path, params)
+                success, reason = self._start_llama_server(
+                    model_path, mmproj_path, params
+                )
                 if not success:
                     return False, reason
             else:
-                success, reason = self._load_python_binding(model_path, mmproj_path, chat_format, params)
+                success, reason = self._load_python_binding(
+                    model_path, mmproj_path, chat_format, params
+                )
                 if not success:
                     return False, reason
 
@@ -266,7 +299,9 @@ class LLMEngine:
             self.chat_format = chat_format
             self.multimodal_enabled = bool(mmproj_path)
 
-            mode = "llama_server" if self.backend == "llama_server" else "python_binding"
+            mode = (
+                "llama_server" if self.backend == "llama_server" else "python_binding"
+            )
             if self.multimodal_enabled:
                 return True, f"Loaded multimodal model ({mode}): {self.model_name}"
             return True, f"Loaded model ({mode}): {self.model_name}"
@@ -320,7 +355,9 @@ class LLMEngine:
 
         return max(1, len(text) // 3)
 
-    def generate_json(self, messages: List[Dict[str, Any]], params: Dict[str, Any]) -> str:
+    def generate_json(
+        self, messages: List[Dict[str, Any]], params: Dict[str, Any]
+    ) -> str:
         if not self.is_loaded():
             return "{}"
 
@@ -344,7 +381,9 @@ class LLMEngine:
                 if not r.ok:
                     return "{}"
                 data = json.loads(r.content.decode("utf-8", errors="replace"))
-                return str(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                return str(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 return "{}"
 
@@ -366,7 +405,9 @@ class LLMEngine:
             logger.error("JSON Generation Error: %s", e, exc_info=True)
             return "{}"
 
-    def _stream_from_llama_server(self, messages: List[Dict[str, Any]], params: Dict[str, Any]) -> Generator[str, None, None]:
+    def _stream_from_llama_server(
+        self, messages: List[Dict[str, Any]], params: Dict[str, Any]
+    ) -> Generator[str, None, None]:
         payload: Dict[str, Any] = {
             "model": self.model_name or params.get("model") or "local-model",
             "messages": messages,
@@ -416,7 +457,9 @@ class LLMEngine:
                         continue
 
                     if isinstance(obj, dict) and obj.get("error"):
-                        msg = obj.get("error", {}).get("message") or str(obj.get("error"))
+                        msg = obj.get("error", {}).get("message") or str(
+                            obj.get("error")
+                        )
                         yield f"\n[Backend Error: {msg}]"
                         return
 

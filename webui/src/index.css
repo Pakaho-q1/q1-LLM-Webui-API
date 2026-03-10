@@ -1,8 +1,7 @@
 @import 'tailwindcss';
-@plugin "@tailwindcss/typography";
+@plugin '@tailwindcss/typography';
 
 :root {
-  /* สีเบื้องต้น (light mode) - เปลี่ยนให้เป็นธรรมชาติ */
   --bg-base: #f8f9fa;
   --bg-surface: #ffffff;
   --bg-elevated: #f0f2f5;
@@ -37,17 +36,16 @@
   --radius-lg: 18px;
 }
 
-/* Dark Mode – เปลี่ยนให้ดูเป็นธรรมชาติ (ไม่เข้มเกินไป) */
 .dark {
-  --bg-base: #0f172a;
+  --bg-base: #0f172a91;
   --bg-surface: #1e293b;
   --bg-elevated: #2d3748;
   --bg-overlay: rgba(15, 23, 46, 0.92);
   --bg-sidebar: #1e293b;
-  --bg-header: rgba(12, 14, 20, 0.94);
+  --bg-header: rgba(12, 14, 20, 0.329);
   --bg-input: #2d3748;
-  --bg-bubble-user: #3b82f65c; /* เปลี่ยนเป็นสีน้ำเงินอ่อน + semi-transparent */
-  --bg-bubble-ai: #1e293b; /* AI ใช้พื้นหลังที่เข้ากับ dark mode เหมือนสีเทา */
+  --bg-bubble-user: #3b82f65c;
+  --bg-bubble-ai: #1e293b;
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-code: #1a1d27;
   --border: rgba(255, 255, 255, 0.08);
@@ -342,7 +340,6 @@ select:disabled {
   background: var(--bg-elevated);
 }
 
-/* Shimmer for idle screen logo */
 @keyframes shimmer {
   0% {
     background-position: -200% center;

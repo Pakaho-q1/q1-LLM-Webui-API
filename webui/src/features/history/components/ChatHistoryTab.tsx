@@ -3,6 +3,8 @@ import { useHistory } from '../hooks/useHistory';
 import { Modal } from '@/components/ui/Modal';
 import { useSSE } from '@/contexts/SSEContext';
 import { useChatStore } from '@/features/chat/store/chat.store';
+import type { Attachment } from '@/features/chat/store/chat.store';
+import { API_BASE, readRuntimeApiKey } from '@/services/api.service';
 import {
   Plus,
   Edit2,
@@ -39,6 +41,50 @@ export const ChatHistoryTab: React.FC = () => {
   const [page, setPage] = useState(1);
   const pageSize = 12;
 
+  const mapHistoryToInternalMessages = (history: any[], conversationId: string) =>
+    history.map((m, idx) => {
+      const runtimeKey = readRuntimeApiKey();
+      const attachments: Attachment[] = Array.isArray(m?.metadata?.attachments)
+        ? m.metadata.attachments
+            .map((a: any) => {
+              const fileId = typeof a?.file_id === 'string' ? a.file_id : '';
+              const baseUrl =
+                typeof a?.url === 'string' && a.url
+                  ? String(a.url)
+                  : fileId
+                    ? `${API_BASE}/v1/files/${encodeURIComponent(fileId)}/content`
+                    : '';
+              if (!baseUrl) return null;
+              const hasApiKey = baseUrl.includes('api_key=');
+              const url = runtimeKey && !hasApiKey
+                ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(runtimeKey)}`
+                : baseUrl;
+              return {
+                url,
+                type: String(a?.type || 'application/octet-stream'),
+                name: a?.name ? String(a.name) : undefined,
+              } as Attachment;
+            })
+            .filter((x: Attachment | null): x is Attachment => Boolean(x))
+            .map((a: any) => ({
+              url: a.url,
+              type: a.type,
+              name: a.name,
+            }))
+        : [];
+
+      const cleanedContent = String(m.content || '')
+        .replace(/(?:\n)?Attached file references:[^\n]*(?:\n)?/gi, '\n')
+        .trim();
+
+      return {
+        id: `hist-${conversationId}-${idx}`,
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: cleanedContent,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      };
+    });
+
   useEffect(() => {
     fetchSessions();
   }, [fetchSessions]);
@@ -53,13 +99,7 @@ export const ChatHistoryTab: React.FC = () => {
     if (savedId && sessions.some((s) => s.id === savedId) && !selected) {
       setSelected(savedId);
       getChatHistory(savedId).then((history) => {
-        setMessages(
-          history.map((m, idx) => ({
-            id: `hist-${savedId}-${idx}`,
-            role: m.role as 'user' | 'assistant' | 'system',
-            content: m.content,
-          })),
-        );
+        setMessages(mapHistoryToInternalMessages(history, savedId));
       });
     }
   }, [sessions, getChatHistory, lastSessionKey, selected, setMessages]);
@@ -93,13 +133,7 @@ export const ChatHistoryTab: React.FC = () => {
   const handleSelect = async (id: string) => {
     setSelected(id);
     const history = await getChatHistory(id);
-    setMessages(
-      history.map((m, idx) => ({
-        id: `hist-${id}-${idx}`,
-        role: m.role as 'user' | 'assistant' | 'system',
-        content: m.content,
-      })),
-    );
+    setMessages(mapHistoryToInternalMessages(history, id));
   };
 
   const handleNewChat = () => {

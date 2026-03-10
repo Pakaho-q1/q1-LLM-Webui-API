@@ -18,7 +18,7 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "model": {
-            "loaded": bool(app_state.llm_engine.llm),
+            "loaded": bool(app_state.llm_engine.is_loaded()),
             "name": app_state.llm_engine.model_name or None,
             "n_ctx": app_state.llm_engine.n_ctx,
         },

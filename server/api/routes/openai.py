@@ -1,14 +1,15 @@
 import asyncio
 import json
+import mimetypes
 import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from api.dependencies import verify_api_key
 from api.openai_stream import start_openai_sse_chat
@@ -101,16 +102,159 @@ def _extract_text_from_content(content: Any) -> str:
     return ""
 
 
-def _normalize_local_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
+def _message_has_image(content: Any) -> bool:
+    if not isinstance(content, list):
+        return False
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            return True
+        if hasattr(part, "type") and getattr(part, "type", None) == "image_url":
+            return True
+    return False
+
+
+def _messages_has_image(messages: List[Dict[str, Any]]) -> bool:
     for msg in messages:
-        normalized.append(
+        if _message_has_image(msg.get("content")):
+            return True
+    return False
+
+
+def _extract_attachments_from_params(params: Dict[str, Any]) -> List[Dict[str, str]]:
+    raw = params.get("_user_message_metadata")
+    if not isinstance(raw, dict):
+        return []
+    attachments = raw.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+
+    result: List[Dict[str, str]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        file_id = item.get("file_id")
+        if not isinstance(file_id, str) or not file_id.strip():
+            continue
+        result.append(
             {
-                **msg,
-                "content": _extract_text_from_content(msg.get("content")),
+                "file_id": file_id.strip(),
+                "name": str(item.get("name") or ""),
+                "type": str(item.get("type") or ""),
             }
         )
-    return normalized
+    return result
+
+
+def _resolve_local_file_path(file_id: str) -> Path | None:
+    matches = list(LOCAL_OPENAI_FILES_DIR.glob(f"{file_id}*"))
+    if not matches:
+        return None
+    return matches[0]
+
+
+def _guess_text_file(content_type: str, filename: str) -> bool:
+    lower_ct = (content_type or "").lower()
+    if lower_ct.startswith("text/"):
+        return True
+    if lower_ct in {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/x-javascript",
+        "application/x-ndjson",
+    }:
+        return True
+
+    ext = Path(filename).suffix.lower()
+    if ext in {
+        ".txt",
+        ".md",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".csv",
+        ".tsv",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".html",
+        ".css",
+        ".sql",
+        ".log",
+        ".ini",
+        ".toml",
+        ".cfg",
+        ".conf",
+        ".sh",
+        ".bat",
+        ".ps1",
+        ".go",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rs",
+    }:
+        return True
+    return False
+
+
+def _read_text_file_for_prompt(file_path: Path, max_bytes: int = 120_000) -> Tuple[bool, str]:
+    raw = file_path.read_bytes()[:max_bytes]
+    try:
+        return True, raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return True, raw.decode("utf-8", errors="replace")
+        except Exception:
+            return False, ""
+
+
+def _build_attachment_context(params: Dict[str, Any]) -> str:
+    attachments = _extract_attachments_from_params(params)
+    if not attachments:
+        return ""
+
+    blocks: List[str] = []
+    for a in attachments:
+        file_id = a["file_id"]
+        path = _resolve_local_file_path(file_id)
+        if path is None:
+            continue
+
+        content_type = a["type"] or (mimetypes.guess_type(path.name)[0] or "")
+        if _guess_text_file(content_type, path.name):
+            ok, text = _read_text_file_for_prompt(path)
+            if ok:
+                blocks.append(
+                    f"[File: {a['name'] or path.name} | id: {file_id}]\n{text.strip()}\n"
+                )
+
+    if not blocks:
+        return ""
+
+    return (
+        "The user attached file content. Use it as trusted context.\n"
+        "Attached file excerpts:\n\n"
+        + "\n---\n".join(blocks)
+    )
+
+
+def _inject_attachment_context(messages: List[Dict[str, Any]], attachment_context: str) -> List[Dict[str, Any]]:
+    if not attachment_context.strip():
+        return messages
+
+    return [
+        {
+            "role": "system",
+            "content": attachment_context.strip(),
+        },
+        *messages,
+    ]
 
 
 async def _proxy_json(method: str, path: str, token: str, **kwargs) -> JSONResponse:
@@ -244,6 +388,47 @@ async def openai_audio_transcriptions(
     return await _proxy_json("POST", "/audio/transcriptions", token, files=files, data={"model": model})
 
 
+@router.get("/v1/files/{file_id}/content")
+async def openai_file_content(file_id: str, request: Request):
+    token = _get_bearer_token(request)
+    if token:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(
+                f"{PROXY_BASE_URL}/files/{file_id}/content",
+                headers=_proxy_headers(token),
+            )
+        if response.status_code >= 400:
+            return openai_error_response(
+                message=response.text or "Failed to fetch file content",
+                status_code=response.status_code,
+                error_type="invalid_request_error" if response.status_code < 500 else "server_error",
+            )
+        media_type = response.headers.get("content-type", "application/octet-stream")
+        return StreamingResponse(iter([response.content]), media_type=media_type)
+
+    candidates = list(LOCAL_OPENAI_FILES_DIR.glob(f"{file_id}*"))
+    if not candidates:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = candidates[0]
+    guessed_content_type = "application/octet-stream"
+    lower_name = file_path.name.lower()
+    if lower_name.endswith((".png",)):
+        guessed_content_type = "image/png"
+    elif lower_name.endswith((".jpg", ".jpeg")):
+        guessed_content_type = "image/jpeg"
+    elif lower_name.endswith(".webp"):
+        guessed_content_type = "image/webp"
+    elif lower_name.endswith(".gif"):
+        guessed_content_type = "image/gif"
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=guessed_content_type,
+        filename=file_path.name,
+    )
+
+
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(request: Request, payload: OpenAIChatCompletionRequest):
     if not payload.messages:
@@ -293,10 +478,30 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
         return await _proxy_json("POST", "/chat/completions", token, json=proxy_payload)
 
     raw_messages: List[Dict[str, Any]] = [m.model_dump() for m in payload.messages]
-    messages = _normalize_local_messages(raw_messages)
-    user_messages = [m for m in messages if m.get("role") == "user" and m.get("content")]
-    user_input = user_messages[-1].get("content", "") if user_messages else ""
-    if not user_input:
+    messages = raw_messages
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    last_user_message = user_messages[-1] if user_messages else {}
+    user_input = _extract_text_from_content(last_user_message.get("content"))
+    has_image_input = _messages_has_image(messages)
+
+    if has_image_input and not app_state.llm_engine.multimodal_enabled:
+        return openai_error_response(
+            message="Image input requires a vision-capable model with mmproj loaded",
+            status_code=400,
+            code="vision_not_enabled",
+            param="messages",
+        )
+
+    merged_params = _normalize_params(payload)
+    attachment_context = _build_attachment_context(merged_params)
+    model_messages = _inject_attachment_context(messages, attachment_context)
+    has_file_input = bool(_extract_attachments_from_params(merged_params))
+
+    if not user_input and has_image_input:
+        user_input = "[Image input]"
+    if not user_input and has_file_input:
+        user_input = "[File input]"
+    if not user_input and not has_image_input and not has_file_input:
         return openai_error_response(
             message="The last user message content is required",
             status_code=400,
@@ -305,7 +510,6 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
         )
 
     conversation_id = payload.conversation_id or "default_conv"
-    merged_params = _normalize_params(payload)
 
     if payload.stream and payload.client_id:
         try:
@@ -314,7 +518,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                 client_id=payload.client_id,
                 conversation_id=conversation_id,
                 user_input=str(user_input),
-                messages=messages,
+                messages=model_messages,
                 params=merged_params,
                 request_id=payload.request_id,
             )
@@ -362,7 +566,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                     merged_params,
                     status_cb,
                     chunk_cb,
-                    messages=messages,
+                    messages=model_messages,
                 )
                 await queue.put(None)
             except Exception as exc:
@@ -434,7 +638,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             merged_params,
             status_cb,
             chunk_cb,
-            messages=messages,
+            messages=model_messages,
         )
     except Exception as exc:
         return openai_error_response(

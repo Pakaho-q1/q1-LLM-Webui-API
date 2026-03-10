@@ -2,7 +2,7 @@ import asyncio
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.dependencies import verify_api_key
 from api.runtime import app_state
@@ -12,15 +12,11 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 class LoadModelRequest(BaseModel):
     model_path: str
-    params: Dict[str, Any] = {}
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DownloadModelRequest(BaseModel):
     url: str
-
-
-class FetchHfRequest(BaseModel):
-    repo: str
 
 
 class CancelDownloadRequest(BaseModel):
@@ -47,15 +43,28 @@ async def load_model(payload: LoadModelRequest):
     if safe_model_path is None:
         raise HTTPException(status_code=400, detail="invalid model_path")
 
+    load_plan = app_state.model_manager.build_load_plan(model_name, payload.params or {})
+
     loop = asyncio.get_running_loop()
     success, message = await loop.run_in_executor(
         app_state.executor,
-        lambda: app_state.llm_engine.load_model(str(safe_model_path), **(payload.params or {})),
+        lambda: app_state.llm_engine.load_model(
+            str(safe_model_path), **(load_plan.get("params") or {})
+        ),
     )
     if not success:
         raise HTTPException(status_code=500, detail=message)
 
-    return {"status": "ok", "data": {"name": model_name}}
+    return {
+        "status": "ok",
+        "data": {
+            "name": model_name,
+            "vision_enabled": bool(load_plan.get("vision_enabled")),
+            "mmproj": load_plan.get("mmproj"),
+            "mmproj_score": load_plan.get("mmproj_score"),
+            "mmproj_reason": load_plan.get("mmproj_reason"),
+        },
+    }
 
 
 @router.post("/api/models/unload")
@@ -86,7 +95,6 @@ async def fetch_hf(repo: str):
     files = await loop.run_in_executor(
         app_state.executor,
         app_state.model_manager.fetch_hf_repo,
-        repo,
     )
     return {"data": files or []}
 
@@ -139,13 +147,16 @@ async def cancel_download(payload: CancelDownloadRequest):
 
 @router.get("/api/models/status")
 async def model_status():
-    running = bool(app_state.llm_engine.llm)
+    running = bool(app_state.llm_engine.is_loaded())
     name = app_state.llm_engine.model_name or ""
     return {
         "running": running,
         "loading": False,
         "name": name,
         "model": name,
+        "vision_enabled": bool(app_state.llm_engine.multimodal_enabled),
+        "mmproj": app_state.llm_engine.mmproj_path or "",
+        "chat_format": app_state.llm_engine.chat_format or "",
     }
 
 

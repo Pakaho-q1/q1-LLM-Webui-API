@@ -1,9 +1,9 @@
 export const parseThinking = (text: string) => {
-  const match = text.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
+  const match = text.match(/<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/i);
   if (match) {
     return {
-      thinkingText: match[1].trim(),
-      cleanContent: text.replace(/<think>[\s\S]*?(?:<\/think>|$)/, '').trim(),
+      thinkingText: match[2].trim(),
+      cleanContent: text.replace(/<(think|thinking)>[\s\S]*?(?:<\/\1>|$)/i, '').trim(),
     };
   }
   return { thinkingText: null, cleanContent: text };

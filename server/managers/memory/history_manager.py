@@ -1,13 +1,14 @@
 import sqlite3
 import json
+import re
 import uuid
 import time
 import hashlib
 import math
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Callable, Optional, Set, Tuple
+from pathlib import Path
+from typing import List, Dict, Any, Callable, Optional, Set
 
 from mem0 import Memory
 from mem0.llms.base import LLMBase
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 RECENCY_HALF_LIFE_DAYS = 30
 MIN_EPISODIC_LENGTH = 20
 MIN_LTM_USER_LENGTH = 30
+OPENAI_FILES_DIR = Path(__file__).resolve().parents[2] / "data" / "openai_files"
 
 
 class MyLocalLLM(LLMBase):
@@ -274,17 +276,10 @@ class HistoryManager:
         raw_summary = self.engine.generate_json(summary_prompt, {"max_tokens": 500})
 
         new_summary = ""
-        import json
-
         try:
-
             parsed_json = json.loads(raw_summary)
-
             new_summary = parsed_json.get("summary", "")
         except json.JSONDecodeError:
-
-            import re
-
             match = re.search(r'"summary"\s*:\s*"(.*)', raw_summary, re.DOTALL)
             if match:
                 new_summary = match.group(1).rstrip('"}')
@@ -369,12 +364,72 @@ class HistoryManager:
         )
         conn.commit()
 
+    @staticmethod
+    def _extract_file_ids(metadata: Any) -> Set[str]:
+        ids: Set[str] = set()
+        if not isinstance(metadata, dict):
+            return ids
+        attachments = metadata.get("attachments")
+        if not isinstance(attachments, list):
+            return ids
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            file_id = item.get("file_id")
+            if isinstance(file_id, str) and file_id.strip():
+                ids.add(file_id.strip())
+        return ids
+
+    @staticmethod
+    def _parse_metadata(raw: Any) -> Dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {}
+        return {}
+
+    def _delete_local_openai_files(self, file_ids: Set[str]) -> None:
+        if not file_ids:
+            return
+        OPENAI_FILES_DIR.mkdir(parents=True, exist_ok=True)
+        for file_id in file_ids:
+            for p in OPENAI_FILES_DIR.glob(f"{file_id}*"):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                except Exception:
+                    logger.warning("Failed to delete file: %s", p, exc_info=True)
+
     def delete_session(self, conv_id: str) -> None:
         conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT metadata FROM messages WHERE conv_id=?",
+            (conv_id,),
+        ).fetchall()
+        candidate_file_ids: Set[str] = set()
+        for row in rows:
+            candidate_file_ids.update(self._extract_file_ids(self._parse_metadata(row["metadata"])))
+
         conn.execute("DELETE FROM episodic_facts WHERE conv_id=?", (conv_id,))
         conn.execute("DELETE FROM semantic_memories WHERE conv_id=?", (conv_id,))
         conn.execute("DELETE FROM sessions WHERE id=?", (conv_id,))
         conn.commit()
+
+        if candidate_file_ids:
+            other_rows = conn.execute(
+                "SELECT metadata FROM messages WHERE conv_id<>?",
+                (conv_id,),
+            ).fetchall()
+            still_used: Set[str] = set()
+            for row in other_rows:
+                still_used.update(self._extract_file_ids(self._parse_metadata(row["metadata"])))
+
+            self._delete_local_openai_files(candidate_file_ids - still_used)
 
     def add_message(
         self,
@@ -429,7 +484,7 @@ class HistoryManager:
             self._get_conn()
             .execute(
                 """
-            SELECT id, role, content, tokens, created_at
+            SELECT id, role, content, tokens, created_at, metadata
             FROM messages
             WHERE conv_id=? AND is_archived=0
             ORDER BY created_at ASC
@@ -438,7 +493,12 @@ class HistoryManager:
             )
             .fetchall()
         )
-        return [dict(r) for r in rows]
+        result: List[Dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            item["metadata"] = self._parse_metadata(item.get("metadata"))
+            result.append(item)
+        return result
 
     def get_working_memory(self, conv_id: str, max_tokens: int) -> List[Dict[str, Any]]:
 
@@ -796,39 +856,6 @@ class HistoryManager:
 
         working = self.get_working_memory(conv_id, working_budget)
 
-        def calc_pct(val: float) -> str:
-            return f"{round((val / real_n_ctx) * 100, 1)}%" if real_n_ctx > 0 else "0%"
-
-        print("\n" + "=" * 50)
-        print(" ( 🪙 Dynamic Token Calculation ):")
-        print(f" 📦 n_ctx (Context Window) = {real_n_ctx} tokens")
-        print("-" * 50)
-        print(
-            f" [-] System Prompt      = {system_tokens_estimate:<5} ({calc_pct(system_tokens_estimate)})"
-        )
-        print(
-            f" [-] User Input         = {user_input_tokens:<5} ({calc_pct(user_input_tokens)})"
-        )
-        print(
-            f" [-] LLM Output Reserve = {target_response_tokens:<5} ({calc_pct(target_response_tokens)})"
-        )
-        print(
-            f" [-] Safety Margin      = {self.safety_margin:<5} ({calc_pct(self.safety_margin)})"
-        )
-        print("-" * 50)
-        print(f" [=] Fixed Budget Total = {fixed_budget:<5} ({calc_pct(fixed_budget)})")
-        print(
-            f" [=] Memory Pool Left   = {raw_memory_pool:<5} ({calc_pct(raw_memory_pool)})"
-        )
-        print("-" * 50)
-        print(f" [*] LTM Used           = {ltm_tokens:<5} (Max: {max_ltm_tokens})")
-        print(
-            f" [*] Episodic Used      = {episodic_tokens:<5} (Max: {max_episodic_tokens})"
-        )
-        print(f" [*] Working Budget     = {working_budget:<5} tokens")
-        print(f"     -> 🔄 Retrieved History: {len(working)} messages")
-        print("=" * 50 + "\n")
-
         conn = self._get_conn()
         session = conn.execute(
             "SELECT summary FROM sessions WHERE id=?", (conv_id,)
@@ -865,7 +892,6 @@ class HistoryManager:
 
         return context
 
-    def _estimate_ltm_tokens(self, memories: List[Dict]) -> int:
-        if not memories:
-            return 0
-        return sum(self._count_tokens(m.get("content", "")) for m in memories) + 60
+
+
+

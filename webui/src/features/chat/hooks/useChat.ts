@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
 import {
+  API_BASE,
   apiFetch,
   fileToDataUrl,
   OpenAIChatMessage,
@@ -39,6 +40,9 @@ export const useChat = () => {
 
   const idRef = useRef(0);
   const createId = () => `msg-${Date.now()}-${idRef.current++}`;
+  const buildPersistentFileUrl = (fileId: string): string => {
+    return `${API_BASE}/v1/files/${encodeURIComponent(fileId)}/content`;
+  };
   const buildTitleFromFirstSentence = (text: string): string => {
     const clean = text.replace(/\s+/g, ' ').trim();
     if (!clean) return 'New Chat';
@@ -70,26 +74,6 @@ export const useChat = () => {
       try {
         setChatError(null);
         let conversationId = currentConversation;
-
-        if (!conversationId) {
-          // Create with a neutral title first. First auto-rename is applied only
-          // after the first successful backend response to keep state consistent.
-          pendingAutoTitle = buildTitleFromFirstSentence(text);
-          const created = await apiFetch<{ data?: { id?: string } }>('/sessions', {
-            method: 'POST',
-            body: JSON.stringify({ title: DEFAULT_NEW_SESSION_TITLE }),
-          });
-          conversationId = created?.data?.id || null;
-          if (!conversationId) {
-            throw new Error('Failed to create new chat session');
-          }
-          shouldAutoRenameAfterSuccess =
-            pendingAutoTitle.length > 0 &&
-            pendingAutoTitle !== DEFAULT_NEW_SESSION_TITLE;
-          setCurrentConversation?.(conversationId);
-          localStorage.setItem('v1_last_session_id', conversationId);
-        }
-
         const attachments: Attachment[] | undefined =
           files.length > 0
             ? files.map((file) => ({
@@ -111,6 +95,25 @@ export const useChat = () => {
         setGenerating(true);
         pushMessage(userMsg);
 
+        if (!conversationId) {
+          // Create with a neutral title first. First auto-rename is applied only
+          // after the first successful backend response to keep state consistent.
+          pendingAutoTitle = buildTitleFromFirstSentence(text);
+          const created = await apiFetch<{ data?: { id?: string } }>('/sessions', {
+            method: 'POST',
+            body: JSON.stringify({ title: DEFAULT_NEW_SESSION_TITLE }),
+          });
+          conversationId = created?.data?.id || null;
+          if (!conversationId) {
+            throw new Error('Failed to create new chat session');
+          }
+          shouldAutoRenameAfterSuccess =
+            pendingAutoTitle.length > 0 &&
+            pendingAutoTitle !== DEFAULT_NEW_SESSION_TITLE;
+          setCurrentConversation?.(conversationId);
+          localStorage.setItem('v1_last_session_id', conversationId);
+        }
+
         let history = useChatStore
           .getState()
           .messages.map((m) => toOpenAIMessage(m));
@@ -119,7 +122,13 @@ export const useChat = () => {
           history = [{ role: 'system', content: systemPrompt }, ...history];
         }
 
-        const fileNotes: string[] = [];
+        const uploadedAttachmentsMeta: Array<{
+          file_id: string;
+          name: string;
+          type: string;
+          url: string;
+          is_image: boolean;
+        }> = [];
         const contentParts: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [];
         if (text.trim()) {
           contentParts.push({ type: 'text', text: text.trim() });
@@ -127,7 +136,14 @@ export const useChat = () => {
 
         for (const file of files) {
           const uploaded = await uploadOpenAIFile(file, 'user_data');
-          fileNotes.push(`${file.name} (id: ${uploaded.id})`);
+          const persistentUrl = buildPersistentFileUrl(uploaded.id);
+          uploadedAttachmentsMeta.push({
+            file_id: uploaded.id,
+            name: file.name,
+            type: file.type,
+            url: persistentUrl,
+            is_image: file.type.startsWith('image/'),
+          });
 
           if (file.type.startsWith('image/')) {
             const dataUrl = await fileToDataUrl(file);
@@ -156,13 +172,6 @@ export const useChat = () => {
           }
         }
 
-        if (fileNotes.length > 0) {
-          contentParts.push({
-            type: 'text',
-            text: `Attached file references: ${fileNotes.join(', ')}`,
-          });
-        }
-
         history[history.length - 1] = {
           role: 'user',
           content: contentParts.length > 0 ? contentParts : text,
@@ -178,6 +187,12 @@ export const useChat = () => {
             stream: true,
             conversation_id: conversationId,
             ...params,
+            params: {
+              ...(params || {}),
+              _user_message_metadata: {
+                attachments: uploadedAttachmentsMeta,
+              },
+            },
           },
           {
             signal: abortController.signal,

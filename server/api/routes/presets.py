@@ -2,7 +2,7 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.dependencies import verify_api_key
 from api.runtime import app_state
@@ -14,7 +14,7 @@ class PresetBody(BaseModel):
     name: str
     description: str = ""
     system_prompt: str = ""
-    parameters: Dict[str, Any] = {}
+    parameters: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CreatePresetRequest(BaseModel):
@@ -100,3 +100,4 @@ async def delete_preset(name: str):
     if not success:
         raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
     return {"status": "ok", "data": {"name": name}}
+

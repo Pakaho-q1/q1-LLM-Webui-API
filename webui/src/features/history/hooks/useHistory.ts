@@ -12,6 +12,15 @@ interface SessionItem {
 interface HistoryMessage {
   role: string;
   content: string;
+  metadata?: {
+    attachments?: Array<{
+      file_id?: string;
+      name?: string;
+      type?: string;
+      url?: string;
+      is_image?: boolean;
+    }>;
+  };
 }
 
 const LAST_SESSION_KEY = 'v1_last_session_id';

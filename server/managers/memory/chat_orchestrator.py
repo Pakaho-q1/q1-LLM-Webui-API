@@ -130,6 +130,49 @@ class ChatOrchestrator:
         grounded = self.retrieval_service.build_grounded_prompt(user_input, retrieved)
         return grounded
 
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
+
+    @staticmethod
+    def _extract_user_message_metadata(
+        messages: Optional[List[Dict[str, Any]]],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        explicit = params.get("_user_message_metadata")
+        if isinstance(explicit, dict):
+            return explicit
+
+        if not messages:
+            return {}
+
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+
+            attachments: List[Dict[str, Any]] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    image = part.get("image_url") or {}
+                    url = image.get("url")
+                    if isinstance(url, str) and url.strip():
+                        attachments.append(
+                            {
+                                "kind": "image",
+                                "url": url.strip(),
+                            }
+                        )
+            if attachments:
+                return {"attachments": attachments}
+            break
+
+        return {}
+
     async def process_chat(
         self,
         conv_id: str,
@@ -172,10 +215,15 @@ class ChatOrchestrator:
             await status_cb("Generating response...")
             full_text = ""
             parameters = params.get("parameters", params)
+            model_parameters = {
+                k: v
+                for k, v in parameters.items()
+                if not str(k).startswith("_")
+            }
             loop = asyncio.get_running_loop()
 
             if self._is_stream:
-                sync_stream = self._cached_engine(messages, parameters)
+                sync_stream = self._cached_engine(messages, model_parameters)
 
                 def _next():
                     try:
@@ -192,23 +240,28 @@ class ChatOrchestrator:
                         await chunk_cb(chunk)
             else:
                 full_text = await loop.run_in_executor(
-                    self.executor, lambda: self._cached_engine(messages, parameters)
+                    self.executor, lambda: self._cached_engine(messages, model_parameters)
                 )
                 if full_text:
                     await chunk_cb(full_text)
 
-            clean_text = re.sub(
-                r"<think>.*?</think>", "", full_text, flags=re.DOTALL
-            ).strip()
+            assistant_raw_text = (full_text or "").strip()
+            assistant_for_memory = self._strip_think_tags(assistant_raw_text)
+            user_metadata = self._extract_user_message_metadata(messages, params)
 
             await status_cb("Saving to memory...")
 
-            self.history.add_message(conv_id, "user", user_input)
-            self.history.add_message(conv_id, "assistant", clean_text)
+            self.history.add_message(
+                conv_id,
+                "user",
+                user_input,
+                metadata=user_metadata,
+            )
+            self.history.add_message(conv_id, "assistant", assistant_raw_text)
 
             interaction = [
                 {"role": "user", "content": user_input},
-                {"role": "assistant", "content": clean_text},
+                {"role": "assistant", "content": assistant_for_memory},
             ]
 
             if self.history.should_store_long_term(interaction):

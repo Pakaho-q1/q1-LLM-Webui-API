@@ -1,8 +1,19 @@
 export type ChatRole = 'user' | 'assistant' | 'system';
 
+export interface ChatStreamMetrics {
+  prompt_tokens?: number;
+  prompt_processing_time_ms?: number;
+  prompt_tokens_per_sec?: number;
+  generated_tokens?: number;
+  generation_time_ms?: number;
+  generation_tokens_per_sec?: number;
+  total_time_ms?: number;
+}
+
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  metrics?: ChatStreamMetrics;
 }
 
 export interface ModelParameters {

@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import { apiFetch as apiRequest, ApiError } from '@/services/api.service';
 import { useSystemStore } from '@/services/system.store';
+import { emitTelemetryEvent } from '@/services/telemetry';
 
 export interface FetchRequestOptions {
   requestKey?: string;
@@ -64,6 +65,9 @@ export const FetchProvider: React.FC<{ children: ReactNode }> = ({
       requestOptions: FetchRequestOptions = {},
     ): Promise<T> => {
       const requestKey = requestOptions.requestKey || endpoint;
+      const method = String(options.method || 'GET').toUpperCase();
+      const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const startedAt = performance.now();
       if (requestOptions.cancelPrevious) {
         cancelRequest(requestKey);
       }
@@ -76,21 +80,54 @@ export const FetchProvider: React.FC<{ children: ReactNode }> = ({
       options.signal?.addEventListener('abort', linkedAbort, { once: true });
 
       beginRequest(requestKey);
+      emitTelemetryEvent({
+        name: 'request_start',
+        request_id: requestId,
+        request_key: requestKey,
+        endpoint,
+        method,
+      });
       try {
         const data = await apiRequest<T>(endpoint, {
           ...options,
           signal: controller.signal,
         }, { timeoutMs: requestOptions.timeoutMs });
 
+        emitTelemetryEvent({
+          name: 'request_success',
+          request_id: requestId,
+          request_key: requestKey,
+          endpoint,
+          method,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
         setLastError(null);
         setAuthRequired(false);
         return data;
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
+          emitTelemetryEvent({
+            name: 'request_abort',
+            request_id: requestId,
+            request_key: requestKey,
+            endpoint,
+            method,
+            duration_ms: Math.round(performance.now() - startedAt),
+          });
           throw err;
         }
 
         const normalized = err instanceof Error ? err.message : 'Request failed';
+        emitTelemetryEvent({
+          name: 'request_error',
+          request_id: requestId,
+          request_key: requestKey,
+          endpoint,
+          method,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_name: err instanceof Error ? err.name : 'Error',
+          error_message: normalized,
+        });
         setLastError(normalized);
 
         if (!(requestOptions.suppressGlobalError ?? false)) {

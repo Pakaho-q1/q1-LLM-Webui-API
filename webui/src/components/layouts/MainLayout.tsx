@@ -1,9 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatContainer } from '@/features/chat/components/ChatContainer';
-import { useModelActions, useModelCatalog, useModelStatus } from '@/features/models/hooks/useModelManager';
+import {
+  useModelActions,
+  useModelCatalog,
+  useModelStatus,
+} from '@/features/models/hooks/useModelManager';
 import { useMainLayout } from './hooks/useMainLayout';
 import { useSettings } from '@/services/SettingsContext';
+import { useSystemStore } from '@/services/system.store';
+import { logger } from '@/services/logger';
 import { ConnectionState, useSSE } from '@/contexts/SSEContext';
 import { Combobox } from '@/components/ui/Combobox';
 import { Sun, Moon, Menu, ChevronRight, Zap, ZapOff } from 'lucide-react';
@@ -31,9 +37,9 @@ const Spinner = () => (
 
 export const MainLayout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isLoadingAction, setIsLoadingAction] = useState<
-    'load' | 'unload' | null
-  >(null);
+  const [isLoadingAction, setIsLoadingAction] = useState<'load' | 'unload' | null>(
+    null,
+  );
   const { dark, toggle } = useTheme();
 
   const { localModels, isLoadingModels } = useModelCatalog();
@@ -41,6 +47,8 @@ export const MainLayout: React.FC = () => {
   useModelStatus();
   const { currentModel, isModelRunning, isModelLoading, modelState, modelOperation } =
     useMainLayout();
+  const currentProvider = useSystemStore((state) => state.currentProvider);
+  const providerFeatures = useSystemStore((state) => state.providerFeatures);
   const { settings } = useSettings();
   const { isConnected, connectionState } = useSSE();
 
@@ -69,13 +77,17 @@ export const MainLayout: React.FC = () => {
     try {
       await unloadModel({ preserveForLoad: { targetModel: selectedModel } });
       await loadModel(selectedModel, {
-        n_ctx: settings.nCtx,
-        n_gpu_layers: settings.nGpuLayers,
-        n_threads: settings.nThreads,
-        n_batch: settings.nBatch,
+        ...(providerFeatures.local_model_lifecycle
+          ? {
+              n_ctx: settings.nCtx,
+              n_gpu_layers: settings.nGpuLayers,
+              n_threads: settings.nThreads,
+              n_batch: settings.nBatch,
+            }
+          : {}),
       });
     } catch (err) {
-      console.error('Failed to load model:', err);
+      logger.error('MainLayout', 'Failed to load model', err);
     } finally {
       setIsLoadingAction(null);
     }
@@ -90,8 +102,7 @@ export const MainLayout: React.FC = () => {
     }
   };
 
-  const displayModelName =
-    modelOperation?.targetModel || currentModel || '';
+  const displayModelName = modelOperation?.targetModel || currentModel || '';
 
   const statusLabel =
     modelState === 'loading'
@@ -161,11 +172,8 @@ export const MainLayout: React.FC = () => {
                     }`}
                   />
                 )}
-                <span
-                  className="truncate"
-                  title={displayModelName || undefined}
-                >
-                  {statusLabel}
+                <span className="truncate" title={displayModelName || undefined}>
+                  {currentProvider}: {statusLabel}
                 </span>
               </div>
             </div>
@@ -177,30 +185,31 @@ export const MainLayout: React.FC = () => {
                   value: m.name,
                   searchText: m.name,
                   label: (
-                    <span
-                      className="text-[0.8rem] text-[var(--text-primary)]"
-                      title={m.name}
-                    >
+                    <span className="text-[0.8rem] text-[var(--text-primary)]" title={m.name}>
                       {m.name}
                     </span>
                   ),
                 }))}
                 value={selectedModel}
                 onChange={handleModelChange}
-                placeholder={isLoadingModels ? 'Loading…' : 'Select model…'}
+                placeholder={
+                  isLoadingModels
+                    ? 'Loading...'
+                    : providerFeatures.local_model_lifecycle
+                      ? 'Select local model...'
+                      : 'Select provider model...'
+                }
                 disabled={isLoadingModels || !isConnected}
               />
             </div>
 
             <button
               onClick={handleLoadModel}
-              disabled={
-                !selectedModel || !isConnected || isLoadingAction !== null
-              }
+              disabled={!selectedModel || !isConnected || isLoadingAction !== null}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--success)] px-3.5 py-1.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40"
             >
               {isLoadingAction === 'load' ? <Spinner /> : <Zap size={12} />}
-              Load
+              {providerFeatures.local_model_lifecycle ? 'Load' : 'Set'}
             </button>
 
             <button
@@ -208,12 +217,8 @@ export const MainLayout: React.FC = () => {
               disabled={!isConnected || isLoadingAction !== null}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--danger)] px-3.5 py-1.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {isLoadingAction === 'unload' ? (
-                <Spinner />
-              ) : (
-                <ZapOff size={12} />
-              )}
-              Unload
+              {isLoadingAction === 'unload' ? <Spinner /> : <ZapOff size={12} />}
+              {providerFeatures.local_model_lifecycle ? 'Unload' : 'Reset'}
             </button>
 
             <button

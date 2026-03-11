@@ -9,6 +9,8 @@ export const localModelsKey = ['models', 'local'] as const;
 export const downloadsKey = ['models', 'downloads'] as const;
 export const hfKey = (repo: string) => ['models', 'hf', repo] as const;
 export const modelStatusKey = ['models', 'status'] as const;
+export const providerCurrentKey = ['provider', 'current'] as const;
+export const providerCapabilitiesKey = ['provider', 'capabilities'] as const;
 export const presetsKey = ['presets'] as const;
 export const presetKey = (name: string) => ['presets', name] as const;
 

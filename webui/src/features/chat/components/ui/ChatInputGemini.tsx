@@ -412,6 +412,8 @@ interface ChatInputProps {
   initialText?: string;
   onTextChange?: (text: string) => void;
   onOpenTools?: () => void;
+  inputTokenCount?: number;
+  isCountingTokens?: boolean;
 }
 
 export const ChatInputGemini: React.FC<ChatInputProps> = ({
@@ -422,6 +424,8 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
   initialText,
   onTextChange,
   onOpenTools,
+  inputTokenCount = 0,
+  isCountingTokens = false,
 }) => {
   const [text, setText] = useState('');
   const [files, setFiles] = useState<FileInfo[]>([]);
@@ -926,6 +930,11 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
           ) : files.length > 0 ? (
             <span className="text-[0.72rem] text-[var(--text-tertiary)]">
               {files.length} file{files.length > 1 ? 's' : ''} attached
+            </span>
+          ) : inputTokenCount > 0 || isCountingTokens ? (
+            <span className="text-[0.72rem] text-[var(--text-tertiary)]">
+              Input: {inputTokenCount.toLocaleString()} tok
+              {isCountingTokens ? ' · counting...' : ''}
             </span>
           ) : null}
         </div>

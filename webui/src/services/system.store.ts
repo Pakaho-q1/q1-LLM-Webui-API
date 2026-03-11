@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { ProviderFeatures, ProviderName } from '@/types/provider.types';
 
 export type SidebarTab = 'history' | 'models' | 'settings';
+export const TOAST_DURATION_MS = 3000;
 
 export interface ToastItem {
   id: string;
@@ -11,6 +13,7 @@ export interface ToastItem {
 }
 
 interface SystemState {
+  currentConversationId: string | null;
   currentModel: string;
   isModelRunning: boolean;
   isModelLoading: boolean;
@@ -22,6 +25,12 @@ interface SystemState {
     startedAt: number;
   } | null;
   modelStatusVersion: number;
+  currentProvider: ProviderName;
+  providerFeatures: ProviderFeatures;
+  providerSupportedChatParams: string[];
+  providerConfig: Record<string, unknown>;
+  canonicalChatParams: string[];
+  providerConfigSchema: Record<string, unknown>;
   isAuthRequired: boolean;
   activeSidebarTab: SidebarTab;
   pendingRequestCount: number;
@@ -37,11 +46,19 @@ interface SystemState {
       isModelLoading?: boolean;
     },
     meta?: {
-      source?: 'local' | 'sse' | 'init';
+      source?: 'local' | 'sse' | 'poll' | 'init';
       timestamp?: number;
       requestId?: string;
     },
   ) => void;
+  setProviderState: (state: {
+    currentProvider?: ProviderName;
+    providerFeatures?: ProviderFeatures;
+    providerSupportedChatParams?: string[];
+    providerConfig?: Record<string, unknown>;
+    canonicalChatParams?: string[];
+    providerConfigSchema?: Record<string, unknown>;
+  }) => void;
   beginModelOperation: (type: 'load' | 'unload', targetModel?: string) => string;
   endModelOperation: () => void;
   setAuthRequired: (required: boolean) => void;
@@ -57,15 +74,27 @@ interface SystemState {
   removeToast: (id: string) => void;
   clearToasts: () => void;
   clearStatus: () => void;
+  setCurrentConversationId: (id: string | null) => void;
 }
 
 export const useSystemStore = create<SystemState>((set) => ({
   currentModel: '',
+  currentConversationId: null,
   isModelRunning: false,
   isModelLoading: false,
   modelState: 'idle',
   modelOperation: null,
   modelStatusVersion: 0,
+  currentProvider: 'local',
+  providerFeatures: {
+    local_model_lifecycle: true,
+    model_downloads: true,
+    multimodal: true,
+  },
+  providerSupportedChatParams: [],
+  providerConfig: {},
+  canonicalChatParams: [],
+  providerConfigSchema: {},
   isAuthRequired: false,
   activeSidebarTab: 'history',
   pendingRequestCount: 0,
@@ -88,7 +117,7 @@ export const useSystemStore = create<SystemState>((set) => ({
       const nextLoading = status.isModelLoading ?? state.isModelLoading;
       const nextModel = status.currentModel ?? state.currentModel;
 
-      if (source === 'sse' && op) {
+      if ((source === 'sse' || source === 'poll') && op) {
         if (op.type === 'load') {
           const incomingModel = status.currentModel ?? nextModel;
           const target = op.targetModel ?? '';
@@ -143,6 +172,17 @@ export const useSystemStore = create<SystemState>((set) => ({
         modelStatusVersion: timestamp,
       };
     }),
+  setProviderState: (providerState) =>
+    set((state) => ({
+      ...state,
+      currentProvider: providerState.currentProvider ?? state.currentProvider,
+      providerFeatures: providerState.providerFeatures ?? state.providerFeatures,
+      providerSupportedChatParams:
+        providerState.providerSupportedChatParams ?? state.providerSupportedChatParams,
+      providerConfig: providerState.providerConfig ?? state.providerConfig,
+      canonicalChatParams: providerState.canonicalChatParams ?? state.canonicalChatParams,
+      providerConfigSchema: providerState.providerConfigSchema ?? state.providerConfigSchema,
+    })),
   beginModelOperation: (type, targetModel) => {
     const id = `op-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     set({
@@ -182,12 +222,13 @@ export const useSystemStore = create<SystemState>((set) => ({
       };
     }),
   setLastError: (message) => set({ lastError: message }),
-  pushToast: (message, kind = 'info', durationMs = 4000) => {
+  pushToast: (message, kind = 'info', _durationMs = TOAST_DURATION_MS) => {
+    const effectiveDuration = TOAST_DURATION_MS;
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     set((state) => ({
       toasts: [
         ...state.toasts,
-        { id, message, kind, createdAt: Date.now(), durationMs },
+        { id, message, kind, createdAt: Date.now(), durationMs: effectiveDuration },
       ],
     }));
     return id;
@@ -195,14 +236,26 @@ export const useSystemStore = create<SystemState>((set) => ({
   removeToast: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
   clearToasts: () => set({ toasts: [] }),
+  setCurrentConversationId: (id) => set({ currentConversationId: id }),
   clearStatus: () =>
     set({
       currentModel: '',
+      currentConversationId: null,
       isModelRunning: false,
       isModelLoading: false,
       modelState: 'idle',
       modelOperation: null,
       modelStatusVersion: 0,
+      currentProvider: 'local',
+      providerFeatures: {
+        local_model_lifecycle: true,
+        model_downloads: true,
+        multimodal: true,
+      },
+      providerSupportedChatParams: [],
+      providerConfig: {},
+      canonicalChatParams: [],
+      providerConfigSchema: {},
       isAuthRequired: false,
       pendingRequestCount: 0,
       pendingRequestsByKey: {},

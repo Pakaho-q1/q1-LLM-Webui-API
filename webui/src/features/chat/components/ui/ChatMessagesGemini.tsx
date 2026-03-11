@@ -6,14 +6,18 @@ import { ArrowDown } from 'lucide-react';
 
 interface ChatMessagesProps {
   messages: Message[];
-  onEdit?: (msg: Message) => void;
+  onEdit?: (msg: Message, nextContent?: string) => void;
   onRetry?: (msg: Message) => void;
+  onDelete?: (msg: Message) => void;
+  onDeleteChat?: () => void;
 }
 
 export const ChatMessagesGemini: React.FC<ChatMessagesProps> = ({
   messages,
   onEdit,
   onRetry,
+  onDelete,
+  onDeleteChat,
 }) => {
   const { scrollRef, showNewMessageButton, handleScrollToBottomClick } =
     useSmartScroll(messages);
@@ -31,6 +35,8 @@ export const ChatMessagesGemini: React.FC<ChatMessagesProps> = ({
               msg={msg}
               onEdit={onEdit}
               onRetry={onRetry}
+              onDelete={onDelete}
+              onDeleteChat={onDeleteChat}
               animIndex={index}
             />
           ))}

@@ -11,11 +11,14 @@ import {
 import { useSSE } from '@/contexts/SSEContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { sessionsKey } from '@/services/dataClient';
+import { useSystemStore } from '@/services/system.store';
+import { emitTelemetryEvent } from '@/services/telemetry';
 import {
   Attachment,
   InternalMessage,
   useChatStore,
 } from '../store/chat.store';
+import { ChatStreamMetrics } from '@/types/chat.types';
 
 const toOpenAIMessage = (message: InternalMessage): OpenAIChatMessage => ({
   role: message.role,
@@ -27,6 +30,8 @@ export const useChat = () => {
   const streamAbortRef = useRef<AbortController | null>(null);
   const { currentConversation, setCurrentConversation } = useSSE();
   const queryClient = useQueryClient();
+  const pushToast = useSystemStore((state) => state.pushToast);
+  const currentProvider = useSystemStore((state) => state.currentProvider);
 
   const {
     messages,
@@ -35,6 +40,7 @@ export const useChat = () => {
     pushMessage,
     removeMessageById,
     appendAssistantChunk,
+    updateAssistantMetrics,
     setGenerating,
     setChatError,
     stopAssistantTyping,
@@ -67,14 +73,18 @@ export const useChat = () => {
       files: File[] = [],
       params: Record<string, unknown> = {},
       systemPrompt = '',
-      model = 'gpt-4o-mini',
+      model?: string,
     ) => {
       if ((!text.trim() && files.length === 0) || isGenerating) return;
 
       let userMessageId: string | null = null;
+      let assistantMessageId: string | null = null;
       let shouldAutoRenameAfterSuccess = false;
       let pendingAutoTitle = '';
       const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const streamStartedAt = performance.now();
+      let streamChunkCount = 0;
+      let streamChars = 0;
       try {
         setChatError(null);
         let conversationId = currentConversation;
@@ -94,10 +104,27 @@ export const useChat = () => {
           content: text,
           attachments,
         };
+        assistantMessageId = createId();
         userMessageId = userMsg.id;
+        const assistantPlaceholder: InternalMessage = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          isTyping: true,
+          metrics: {
+            prompt_tokens: 0,
+            prompt_processing_time_ms: 0,
+            prompt_tokens_per_sec: 0,
+            generated_tokens: 0,
+            generation_time_ms: 0,
+            generation_tokens_per_sec: 0,
+            total_time_ms: 0,
+          },
+        };
 
         setGenerating(true);
         pushMessage(userMsg);
+        pushMessage(assistantPlaceholder);
 
         if (!conversationId) {
           // Create with a neutral title first. First auto-rename is applied only
@@ -184,28 +211,76 @@ export const useChat = () => {
 
         const abortController = new AbortController();
         streamAbortRef.current = abortController;
+        const telemetryConversationId = conversationId || 'unknown';
+        emitTelemetryEvent({
+          name: 'chat_stream_start',
+          request_id: requestId,
+          conversation_id: telemetryConversationId,
+          provider: currentProvider,
+          model: model || undefined,
+        });
 
-        await streamOpenAIChatCompletion(
-          {
-            model,
-            messages: history,
-            stream: true,
-            conversation_id: conversationId,
-            request_id: requestId,
-            ...params,
-            params: {
-              ...(params || {}),
-              _user_message_metadata: {
-                attachments: uploadedAttachmentsMeta,
-              },
+        const requestPayload: Record<string, unknown> = {
+          messages: history,
+          stream: true,
+          conversation_id: conversationId,
+          request_id: requestId,
+          ...params,
+          params: {
+            ...(params || {}),
+            _user_message_metadata: {
+              attachments: uploadedAttachmentsMeta,
+            },
+            _message_ids: {
+              user_message_id: userMsg.id,
+              assistant_message_id: assistantMessageId,
             },
           },
+        };
+        if (model && model.trim()) {
+          requestPayload.model = model.trim();
+        }
+
+        await streamOpenAIChatCompletion(
+          requestPayload,
           {
             signal: abortController.signal,
-            onDelta: (chunk) => appendAssistantChunk(chunk),
+            onDelta: (chunk) => {
+              streamChunkCount += 1;
+              streamChars += chunk.length;
+              appendAssistantChunk(chunk, assistantMessageId || undefined);
+            },
+            onMetrics: (metrics: ChatStreamMetrics) => {
+              updateAssistantMetrics(metrics, assistantMessageId || undefined);
+            },
+            onWarnings: ({ unsupportedParams, invalidParams }) => {
+              if (unsupportedParams.length > 0) {
+                pushToast(
+                  `Unsupported params: ${unsupportedParams.join(', ')}`,
+                  'warning',
+                  5000,
+                );
+              }
+              if (invalidParams.length > 0) {
+                pushToast(
+                  `Invalid param values: ${invalidParams.join(', ')}`,
+                  'warning',
+                  5000,
+                );
+              }
+            },
             onDone: () => {
+              emitTelemetryEvent({
+                name: 'chat_stream_done',
+                request_id: requestId,
+                conversation_id: telemetryConversationId,
+                provider: currentProvider,
+                duration_ms: Math.round(performance.now() - streamStartedAt),
+                chunks: streamChunkCount,
+                chars: streamChars,
+              });
               setGenerating(false);
-              stopAssistantTyping();
+              stopAssistantTyping(assistantMessageId || undefined);
               streamAbortRef.current = null;
             },
           },
@@ -219,7 +294,17 @@ export const useChat = () => {
           queryClient.invalidateQueries({ queryKey: sessionsKey });
         }
       } catch (err) {
+        emitTelemetryEvent({
+          name: 'chat_stream_error',
+          request_id: requestId,
+          conversation_id: currentConversation || 'unknown',
+          provider: currentProvider,
+          duration_ms: Math.round(performance.now() - streamStartedAt),
+          error_name: err instanceof Error ? err.name : 'Error',
+          error_message: err instanceof Error ? err.message : 'Failed to send',
+        });
         if (userMessageId) removeMessageById(userMessageId);
+        if (assistantMessageId) removeMessageById(assistantMessageId);
         setChatError(err instanceof Error ? err.message : 'Failed to send');
         setGenerating(false);
         streamAbortRef.current = null;
@@ -227,13 +312,16 @@ export const useChat = () => {
     },
     [
       appendAssistantChunk,
+      updateAssistantMetrics,
       currentConversation,
+      currentProvider,
       isGenerating,
       pushMessage,
       removeMessageById,
       setCurrentConversation,
       DEFAULT_NEW_SESSION_TITLE,
       queryClient,
+      pushToast,
       setGenerating,
       setChatError,
       stopAssistantTyping,

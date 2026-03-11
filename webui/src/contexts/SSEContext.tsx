@@ -86,14 +86,13 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     ConnectionState.DISCONNECTED,
   );
   const [error, setError] = useState<string | null>(null);
-  const [currentConversation, setCurrentConversation] = useState<string | null>(
-    null,
-  );
-
   const esRef = useRef<EventSource | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const chatListenersRef = useRef<Set<(msg: any) => void>>(new Set());
+  const currentConversation = useSystemStore((state) => state.currentConversationId);
+  const setCurrentConversation = useSystemStore((state) => state.setCurrentConversationId);
   const setModelStatus = useSystemStore((state) => state.setModelStatus);
+  const setProviderState = useSystemStore((state) => state.setProviderState);
   const queryClient = useQueryClient();
 
   const notifyChatListeners = (data: any) => {
@@ -108,6 +107,9 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   const processIncoming = useCallback((data: any) => {
     if (data?.type === 'model_status' && data?.data) {
       const d = data.data as any;
+      if (typeof d.provider === 'string') {
+        setProviderState({ currentProvider: d.provider });
+      }
       setModelStatus(
         {
           currentModel: d.name || d.model || '',
@@ -146,9 +148,9 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     }
 
     if (data.type === 'session_deleted') {
-      setCurrentConversation((prev) =>
-        prev === data.conversation_id ? null : prev,
-      );
+      if (currentConversation === data.conversation_id) {
+        setCurrentConversation(null);
+      }
       if (data.conversation_id) {
         queryClient.invalidateQueries({ queryKey: historyKey(data.conversation_id) });
       }
@@ -170,7 +172,7 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
     const chatTypes = ['chunk', 'done', 'error', 'status'];
     if (chatTypes.includes(data.type)) notifyChatListeners(data);
     if (data.choices && Array.isArray(data.choices)) notifyChatListeners(data);
-  }, [queryClient, setModelStatus]);
+  }, [currentConversation, queryClient, setCurrentConversation, setModelStatus, setProviderState]);
 
   const connect = useCallback(() => {
     if (esRef.current) return;

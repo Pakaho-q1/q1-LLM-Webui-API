@@ -1,6 +1,7 @@
 import os
+from hmac import compare_digest
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -19,16 +20,12 @@ def _extract_api_key(
     request: Request,
     key_header: str | None,
     bearer: HTTPAuthorizationCredentials | None,
-    query_key: str | None,
 ) -> str | None:
     if key_header:
         return key_header.strip()
 
     if bearer and bearer.scheme.lower() == "bearer" and bearer.credentials:
         return bearer.credentials.strip()
-
-    if query_key:
-        return query_key.strip()
 
     auth_header = request.headers.get("Authorization", "")
     if auth_header.lower().startswith("bearer "):
@@ -41,13 +38,12 @@ async def verify_api_key(
     request: Request,
     key_header: str = Depends(api_key_header),
     bearer: HTTPAuthorizationCredentials = Depends(bearer_auth),
-    query_key: str | None = Query(default=None, alias="api_key"),
 ):
     if not REQUIRE_API_KEY:
         return
 
-    provided_key = _extract_api_key(request, key_header, bearer, query_key)
-    if provided_key != API_KEY:
+    provided_key = _extract_api_key(request, key_header, bearer)
+    if not provided_key or not compare_digest(provided_key, API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 

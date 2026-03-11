@@ -10,7 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { useSSE } from '@/contexts/SSEContext';
 import { useChatStore } from '@/features/chat/store/chat.store';
 import type { Attachment } from '@/features/chat/store/chat.store';
-import { API_BASE, readRuntimeApiKey } from '@/services/api.service';
+import { API_BASE } from '@/services/api.service';
 import {
   Plus,
   Edit2,
@@ -54,7 +54,6 @@ export const ChatHistoryTab: React.FC = () => {
     conversationId: string,
   ) =>
     history.map((m, idx) => {
-      const runtimeKey = readRuntimeApiKey();
       const attachments: Attachment[] = Array.isArray(m?.metadata?.attachments)
         ? m.metadata.attachments
             .map((a: any) => {
@@ -66,13 +65,8 @@ export const ChatHistoryTab: React.FC = () => {
                     ? `${API_BASE}/v1/files/${encodeURIComponent(fileId)}/content`
                     : '';
               if (!baseUrl) return null;
-              const hasApiKey = baseUrl.includes('api_key=');
-              const url =
-                runtimeKey && !hasApiKey
-                  ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(runtimeKey)}`
-                  : baseUrl;
               return {
-                url,
+                url: baseUrl,
                 type: String(a?.type || 'application/octet-stream'),
                 name: a?.name ? String(a.name) : undefined,
               } as Attachment;
@@ -90,7 +84,7 @@ export const ChatHistoryTab: React.FC = () => {
         .trim();
 
       return {
-        id: `hist-${conversationId}-${idx}`,
+        id: typeof m?.id === 'string' && m.id ? m.id : `hist-${conversationId}-${idx}`,
         role: m.role as 'user' | 'assistant' | 'system',
         content: cleanedContent,
         attachments: attachments.length > 0 ? attachments : undefined,

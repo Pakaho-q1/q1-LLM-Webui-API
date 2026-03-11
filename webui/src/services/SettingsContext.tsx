@@ -5,8 +5,8 @@ import React, {
   ReactNode,
   useCallback,
   useEffect,
-  useRef,
 } from 'react';
+import { logger } from './logger';
 
 export interface AppSettings {
   systemPrompt: string;
@@ -53,6 +53,46 @@ const defaultSettings: AppSettings = {
   nBatch: 512,
 };
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.max(min, Math.min(max, value));
+
+const toFiniteNumber = (value: unknown, fallback: number): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+
+const sanitizeSettings = (payload: unknown): AppSettings => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return defaultSettings;
+  }
+
+  const source = payload as Record<string, unknown>;
+
+  return {
+    systemPrompt:
+      typeof source.systemPrompt === 'string'
+        ? source.systemPrompt.slice(0, 10000)
+        : defaultSettings.systemPrompt,
+    temperature: clamp(toFiniteNumber(source.temperature, defaultSettings.temperature), 0, 2),
+    maxTokens: Math.round(clamp(toFiniteNumber(source.maxTokens, defaultSettings.maxTokens), 128, 8192)),
+    topP: clamp(toFiniteNumber(source.topP, defaultSettings.topP), 0, 1),
+    topK: Math.round(clamp(toFiniteNumber(source.topK, defaultSettings.topK), 0, 100)),
+    minP: clamp(toFiniteNumber(source.minP, defaultSettings.minP), 0, 1),
+    repeatPenalty: clamp(toFiniteNumber(source.repeatPenalty, defaultSettings.repeatPenalty), 1, 2),
+    frequencyPenalty: clamp(toFiniteNumber(source.frequencyPenalty, defaultSettings.frequencyPenalty), -2, 2),
+    presencePenalty: clamp(toFiniteNumber(source.presencePenalty, defaultSettings.presencePenalty), -2, 2),
+    seed: Math.round(clamp(toFiniteNumber(source.seed, defaultSettings.seed), -1, 2_147_483_647)),
+    nCtx: Math.round(clamp(toFiniteNumber(source.nCtx, defaultSettings.nCtx), 512, 32768)),
+    nGpuLayers: Math.round(clamp(toFiniteNumber(source.nGpuLayers, defaultSettings.nGpuLayers), -1, 100)),
+    nThreads: Math.round(clamp(toFiniteNumber(source.nThreads, defaultSettings.nThreads), 1, 64)),
+    nBatch: Math.round(clamp(toFiniteNumber(source.nBatch, defaultSettings.nBatch), 128, 2048)),
+  };
+};
+
 const getInitialSettings = (): AppSettings => {
   if (typeof window === 'undefined') return defaultSettings;
 
@@ -61,10 +101,9 @@ const getInitialSettings = (): AppSettings => {
     if (!saved) return defaultSettings;
 
     const parsed = JSON.parse(saved);
-
-    return { ...defaultSettings, ...parsed };
+    return sanitizeSettings(parsed);
   } catch (error) {
-    console.error('Failed to load settings from storage:', error);
+    logger.error('SettingsContext', 'Failed to load settings from storage', error);
     return defaultSettings;
   }
 };
@@ -76,8 +115,6 @@ export const SettingsProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [settings, setSettings] = useState<AppSettings>(getInitialSettings);
 
-  const isFirstRender = useRef(true);
-
   useEffect(() => {
     const handler = setTimeout(() => {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -88,7 +125,7 @@ export const SettingsProvider: React.FC<{ children: ReactNode }> = ({
 
   const updateSetting = useCallback(
     <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-      setSettings((prev) => ({ ...prev, [key]: value }));
+      setSettings((prev) => sanitizeSettings({ ...prev, [key]: value }));
     },
     [],
   );

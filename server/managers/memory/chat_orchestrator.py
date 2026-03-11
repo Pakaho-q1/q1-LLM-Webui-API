@@ -173,6 +173,21 @@ class ChatOrchestrator:
 
         return {}
 
+    @staticmethod
+    def _extract_message_ids(params: Dict[str, Any]) -> Dict[str, Optional[str]]:
+        payload = params.get("_message_ids")
+        if not isinstance(payload, dict):
+            return {"user_message_id": None, "assistant_message_id": None}
+
+        user_message_id = payload.get("user_message_id")
+        assistant_message_id = payload.get("assistant_message_id")
+        return {
+            "user_message_id": user_message_id if isinstance(user_message_id, str) and user_message_id.strip() else None,
+            "assistant_message_id": assistant_message_id
+            if isinstance(assistant_message_id, str) and assistant_message_id.strip()
+            else None,
+        }
+
     async def process_chat(
         self,
         conv_id: str,
@@ -202,8 +217,19 @@ class ChatOrchestrator:
                 if not grounded.get("should_answer"):
                     refusal = "I don't have enough evidence in the provided sources."
                     await chunk_cb(refusal)
-                    self.history.add_message(conv_id, "user", user_input)
-                    self.history.add_message(conv_id, "assistant", refusal)
+                    message_ids = self._extract_message_ids(params)
+                    self.history.add_message(
+                        conv_id,
+                        "user",
+                        user_input,
+                        message_id=message_ids["user_message_id"],
+                    )
+                    self.history.add_message(
+                        conv_id,
+                        "assistant",
+                        refusal,
+                        message_id=message_ids["assistant_message_id"],
+                    )
                     return
 
                 rag_system = {
@@ -248,6 +274,7 @@ class ChatOrchestrator:
             assistant_raw_text = (full_text or "").strip()
             assistant_for_memory = self._strip_think_tags(assistant_raw_text)
             user_metadata = self._extract_user_message_metadata(messages, params)
+            message_ids = self._extract_message_ids(params)
 
             await status_cb("Saving to memory...")
 
@@ -255,9 +282,15 @@ class ChatOrchestrator:
                 conv_id,
                 "user",
                 user_input,
+                message_id=message_ids["user_message_id"],
                 metadata=user_metadata,
             )
-            self.history.add_message(conv_id, "assistant", assistant_raw_text)
+            self.history.add_message(
+                conv_id,
+                "assistant",
+                assistant_raw_text,
+                message_id=message_ids["assistant_message_id"],
+            )
 
             interaction = [
                 {"role": "user", "content": user_input},

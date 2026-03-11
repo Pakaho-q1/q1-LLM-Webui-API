@@ -1,15 +1,16 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '@/services/api.service';
 import { useSettings as useSettingsContext } from '../../../services/SettingsContext';
 import { PresetData, PresetListItem } from '../../../types/chat.types';
 import { presetKey, presetsKey, STALE_TIME_MS } from '@/services/dataClient';
+import { useFetch } from '@/contexts/FetchContext';
 
 const extractErrorMessage = (err: unknown, fallback: string) =>
   err instanceof Error ? err.message : fallback;
 
 export const useSettings = () => {
   const { settings, updateSetting } = useSettingsContext();
+  const { apiFetch } = useFetch();
   const queryClient = useQueryClient();
 
   const [selectedPresetName, setSelectedPresetName] = useState<string>('');

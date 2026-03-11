@@ -1,7 +1,9 @@
 import asyncio
 import json
+import logging
 import mimetypes
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -16,11 +18,16 @@ from api.openai_stream import start_openai_sse_chat
 from api.runtime import app_state
 from api.schemas import OpenAIChatCompletionRequest
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 PROXY_BASE_URL = os.environ.get("OPENAI_PROXY_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 LOCAL_OPENAI_FILES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "openai_files"
 LOCAL_OPENAI_FILES_DIR.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = int(os.environ.get("OPENAI_LOCAL_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+SAFE_FILE_ID_PATTERN = re.compile(r"^file-[a-f0-9]{32}$")
+ALLOWED_FILE_PURPOSES = {"user_data", "assistants", "batch", "vision"}
 
 
 def openai_error_response(
@@ -102,6 +109,36 @@ def _extract_text_from_content(content: Any) -> str:
     return ""
 
 
+def _estimate_text_tokens(text: str) -> int:
+    clean = (text or "").strip()
+    if not clean:
+        return 0
+    return max(1, len(clean) // 4)
+
+
+def _build_prompt_text(messages: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        content = _extract_text_from_content(message.get("content"))
+        if content:
+            parts.append(f"{role}:{content}")
+    return "\n".join(parts)
+
+
+def _safe_provider_token_count(text: str) -> int:
+    clean = (text or "").strip()
+    if not clean:
+        return 0
+    try:
+        count = int(app_state.llm_provider.count_tokens(clean))
+        if count >= 0:
+            return count
+    except Exception:
+        pass
+    return _estimate_text_tokens(clean)
+
+
 def _message_has_image(content: Any) -> bool:
     if not isinstance(content, list):
         return False
@@ -146,6 +183,8 @@ def _extract_attachments_from_params(params: Dict[str, Any]) -> List[Dict[str, s
 
 
 def _resolve_local_file_path(file_id: str) -> Path | None:
+    if not SAFE_FILE_ID_PATTERN.match(file_id):
+        return None
     matches = list(LOCAL_OPENAI_FILES_DIR.glob(f"{file_id}*"))
     if not matches:
         return None
@@ -212,6 +251,34 @@ def _read_text_file_for_prompt(file_path: Path, max_bytes: int = 120_000) -> Tup
             return True, raw.decode("utf-8", errors="replace")
         except Exception:
             return False, ""
+
+
+async def _read_upload_limited(upload: UploadFile, max_bytes: int) -> bytes:
+    chunks: List[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum allowed is {max_bytes} bytes",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _safe_file_extension(filename: str) -> str:
+    ext = Path(filename or "").suffix.lower()
+    if not ext:
+        return ""
+    if len(ext) > 16:
+        return ""
+    if re.fullmatch(r"\.[a-z0-9]+", ext) is None:
+        return ""
+    return ext
 
 
 def _build_attachment_context(params: Dict[str, Any]) -> str:
@@ -334,9 +401,17 @@ async def upload_openai_file(
     file: UploadFile = File(...),
     purpose: str = Form(default="user_data"),
 ):
+    if purpose not in ALLOWED_FILE_PURPOSES:
+        return openai_error_response(
+            message=f"Unsupported file purpose: {purpose}",
+            status_code=400,
+            code="invalid_purpose",
+            param="purpose",
+        )
+
     token = _get_bearer_token(request)
+    data = await _read_upload_limited(file, MAX_UPLOAD_BYTES)
     if token:
-        data = await file.read()
         files = {
             "file": (
                 file.filename or "upload.bin",
@@ -346,9 +421,8 @@ async def upload_openai_file(
         }
         return await _proxy_json("POST", "/files", token, files=files, data={"purpose": purpose})
 
-    data = await file.read()
     file_id = f"file-{uuid.uuid4().hex}"
-    ext = Path(file.filename or "").suffix
+    ext = _safe_file_extension(file.filename or "")
     save_path = LOCAL_OPENAI_FILES_DIR / f"{file_id}{ext}"
     save_path.write_bytes(data)
 
@@ -377,7 +451,7 @@ async def openai_audio_transcriptions(
             code="transcription_not_configured",
         )
 
-    data = await file.read()
+    data = await _read_upload_limited(file, MAX_UPLOAD_BYTES)
     files = {
         "file": (
             file.filename or "audio.webm",
@@ -405,6 +479,9 @@ async def openai_file_content(file_id: str, request: Request):
             )
         media_type = response.headers.get("content-type", "application/octet-stream")
         return StreamingResponse(iter([response.content]), media_type=media_type)
+
+    if not SAFE_FILE_ID_PATTERN.match(file_id):
+        raise HTTPException(status_code=400, detail="Invalid file id")
 
     candidates = list(LOCAL_OPENAI_FILES_DIR.glob(f"{file_id}*"))
     if not candidates:
@@ -484,7 +561,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
     user_input = _extract_text_from_content(last_user_message.get("content"))
     has_image_input = _messages_has_image(messages)
 
-    if has_image_input and not app_state.llm_engine.multimodal_enabled:
+    if has_image_input and not app_state.llm_provider.multimodal_enabled:
         return openai_error_response(
             message="Image input requires a vision-capable model with mmproj loaded",
             status_code=400,
@@ -493,6 +570,13 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
         )
 
     merged_params = _normalize_params(payload)
+    merged_params.setdefault("model", payload.model)
+    unsupported_params = app_state.llm_provider.unsupported_chat_params(merged_params)
+    invalid_params = app_state.llm_provider.invalid_chat_params(merged_params)
+    if unsupported_params:
+        logger.warning("Unsupported chat params for provider '%s': %s", app_state.llm_provider.provider_name, ",".join(unsupported_params))
+    if invalid_params:
+        logger.warning("Invalid chat param values for provider '%s': %s", app_state.llm_provider.provider_name, ",".join(invalid_params))
     attachment_context = _build_attachment_context(merged_params)
     model_messages = _inject_attachment_context(messages, attachment_context)
     has_file_input = bool(_extract_attachments_from_params(merged_params))
@@ -510,6 +594,13 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
         )
 
     conversation_id = payload.conversation_id or "default_conv"
+    prompt_text_for_metrics = _build_prompt_text(model_messages)
+    loop = asyncio.get_running_loop()
+    prompt_tokens = await loop.run_in_executor(
+        app_state.executor,
+        _safe_provider_token_count,
+        prompt_text_for_metrics,
+    )
 
     if payload.stream and payload.client_id:
         try:
@@ -521,6 +612,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                 messages=model_messages,
                 params=merged_params,
                 request_id=payload.request_id,
+                prompt_tokens=prompt_tokens,
             )
         except ValueError as exc:
             return openai_error_response(
@@ -534,7 +626,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             "id": started["chat_id"],
             "object": "chat.completion",
             "created": started["created"],
-            "model": app_state.llm_engine.model_name or payload.model or "local-model",
+            "model": app_state.llm_provider.model_name or payload.model or "local-model",
             "choices": [
                 {
                     "index": 0,
@@ -544,19 +636,59 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             ],
             "request_id": started["request_id"],
             "conversation_id": conversation_id,
+            "warnings": {
+                "unsupported_params": unsupported_params,
+                "invalid_params": invalid_params,
+            },
         }
 
     if payload.stream:
         completion_id = f"chatcmpl-{uuid.uuid4()}"
         created = int(time.time())
-        model_name = app_state.llm_engine.model_name or payload.model or "local-model"
+        model_name = app_state.llm_provider.model_name or payload.model or "local-model"
         queue: asyncio.Queue[Any] = asyncio.Queue()
+        started_at = time.perf_counter()
+        response_headers = {}
+        if unsupported_params:
+            response_headers["X-Unsupported-Params"] = ",".join(unsupported_params)
+        if invalid_params:
+            response_headers["X-Invalid-Params"] = ",".join(invalid_params)
 
         async def status_cb(_msg: str):
             return None
 
+        generated_text_parts: List[str] = []
+        first_chunk_at: float | None = None
+
         async def chunk_cb(chunk: str):
-            await queue.put(chunk)
+            nonlocal first_chunk_at
+            now = time.perf_counter()
+            if first_chunk_at is None:
+                first_chunk_at = now
+            generated_text_parts.append(chunk)
+            generated_text = "".join(generated_text_parts)
+            generated_tokens_est = _estimate_text_tokens(generated_text)
+            prompt_processing_time_ms = max(1, int((first_chunk_at - started_at) * 1000))
+            generation_time_ms = max(1, int((now - first_chunk_at) * 1000))
+            await queue.put(
+                {
+                    "type": "chunk",
+                    "text": chunk,
+                    "metrics": {
+                        "prompt_tokens": prompt_tokens,
+                        "prompt_processing_time_ms": prompt_processing_time_ms,
+                        "prompt_tokens_per_sec": round(prompt_tokens / (prompt_processing_time_ms / 1000), 2)
+                        if prompt_processing_time_ms > 0
+                        else 0.0,
+                        "generated_tokens": generated_tokens_est,
+                        "generation_time_ms": generation_time_ms,
+                        "generation_tokens_per_sec": round(generated_tokens_est / (generation_time_ms / 1000), 2)
+                        if generation_time_ms > 0
+                        else 0.0,
+                        "total_time_ms": max(1, int((now - started_at) * 1000)),
+                    },
+                }
+            )
 
         async def _runner():
             try:
@@ -567,6 +699,43 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                     status_cb,
                     chunk_cb,
                     messages=model_messages,
+                )
+                completed_at = time.perf_counter()
+                full_text = "".join(generated_text_parts)
+                final_generated_tokens = await asyncio.get_running_loop().run_in_executor(
+                    app_state.executor,
+                    _safe_provider_token_count,
+                    full_text,
+                )
+                prompt_processing_time_ms = (
+                    max(1, int((first_chunk_at - started_at) * 1000))
+                    if first_chunk_at is not None
+                    else max(1, int((completed_at - started_at) * 1000))
+                )
+                generation_time_ms = (
+                    max(1, int((completed_at - first_chunk_at) * 1000))
+                    if first_chunk_at is not None
+                    else 1
+                )
+                await queue.put(
+                    {
+                        "type": "done",
+                        "metrics": {
+                            "prompt_tokens": prompt_tokens,
+                            "prompt_processing_time_ms": prompt_processing_time_ms,
+                            "prompt_tokens_per_sec": round(prompt_tokens / (prompt_processing_time_ms / 1000), 2)
+                            if prompt_processing_time_ms > 0
+                            else 0.0,
+                            "generated_tokens": final_generated_tokens,
+                            "generation_time_ms": generation_time_ms,
+                            "generation_tokens_per_sec": round(
+                                final_generated_tokens / (generation_time_ms / 1000), 2
+                            )
+                            if generation_time_ms > 0
+                            else 0.0,
+                            "total_time_ms": max(1, int((completed_at - started_at) * 1000)),
+                        },
+                    }
                 )
                 await queue.put(None)
             except Exception as exc:
@@ -601,14 +770,51 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                     yield "data: [DONE]\n\n"
                     return
 
+                chunk_data = item if isinstance(item, dict) else {"type": "chunk", "text": str(item)}
+                if chunk_data.get("type") != "chunk":
+                    continue
                 chunk = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model_name,
-                    "choices": [{"index": 0, "delta": {"content": str(item)}, "finish_reason": None}],
+                    "choices": [{"index": 0, "delta": {"content": str(chunk_data.get("text") or "")}, "finish_reason": None}],
+                    "metrics": chunk_data.get("metrics") or {},
                 }
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+            final_metrics: Dict[str, Any] = {}
+            if generated_text_parts:
+                full_text = "".join(generated_text_parts)
+                final_generated_tokens = await asyncio.get_running_loop().run_in_executor(
+                    app_state.executor,
+                    _safe_provider_token_count,
+                    full_text,
+                )
+                finished_at = time.perf_counter()
+                prompt_processing_time_ms = (
+                    max(1, int((first_chunk_at - started_at) * 1000))
+                    if first_chunk_at is not None
+                    else max(1, int((finished_at - started_at) * 1000))
+                )
+                generation_time_ms = (
+                    max(1, int((finished_at - first_chunk_at) * 1000))
+                    if first_chunk_at is not None
+                    else 1
+                )
+                final_metrics = {
+                    "prompt_tokens": prompt_tokens,
+                    "prompt_processing_time_ms": prompt_processing_time_ms,
+                    "prompt_tokens_per_sec": round(prompt_tokens / (prompt_processing_time_ms / 1000), 2)
+                    if prompt_processing_time_ms > 0
+                    else 0.0,
+                    "generated_tokens": final_generated_tokens,
+                    "generation_time_ms": generation_time_ms,
+                    "generation_tokens_per_sec": round(final_generated_tokens / (generation_time_ms / 1000), 2)
+                    if generation_time_ms > 0
+                    else 0.0,
+                    "total_time_ms": max(1, int((finished_at - started_at) * 1000)),
+                }
 
             final_chunk = {
                 "id": completion_id,
@@ -616,12 +822,17 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                 "created": created,
                 "model": model_name,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "metrics": final_metrics,
             }
             yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             await task
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers=response_headers,
+        )
 
     chunks: List[str] = []
 
@@ -651,9 +862,12 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
     content = "".join(chunks)
     completion_id = f"chatcmpl-{uuid.uuid4()}"
     created = int(time.time())
-    model_name = app_state.llm_engine.model_name or payload.model or "local-model"
-    prompt_tokens = sum(max(1, len((m.get("content") or "").split())) for m in messages)
-    completion_tokens = max(1, len(content.split())) if content else 0
+    model_name = app_state.llm_provider.model_name or payload.model or "local-model"
+    completion_tokens = await loop.run_in_executor(
+        app_state.executor,
+        _safe_provider_token_count,
+        content,
+    )
 
     return {
         "id": completion_id,
@@ -671,5 +885,9 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+        },
+        "warnings": {
+            "unsupported_params": unsupported_params,
+            "invalid_params": invalid_params,
         },
     }

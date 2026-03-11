@@ -141,7 +141,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "message": "Internal server error",
-            "detail": str(exc),
+            "detail": "An unexpected error occurred",
             "request_id": getattr(request.state, "request_id", None),
         },
     )

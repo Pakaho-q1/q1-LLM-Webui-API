@@ -18,9 +18,10 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "model": {
-            "loaded": bool(app_state.llm_engine.is_loaded()),
-            "name": app_state.llm_engine.model_name or None,
-            "n_ctx": app_state.llm_engine.n_ctx,
+            "loaded": bool(app_state.llm_provider.is_loaded()),
+            "name": app_state.llm_provider.model_name or None,
+            "n_ctx": app_state.llm_provider.n_ctx,
+            "provider": app_state.llm_provider.provider_name,
         },
         "sse_connections": len(app_state.sse_queues),
         "active_downloads": len(active_downloads),

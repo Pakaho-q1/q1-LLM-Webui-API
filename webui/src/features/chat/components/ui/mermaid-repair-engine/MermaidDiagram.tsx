@@ -10,6 +10,7 @@ import {
   StreamingTimeoutTracker,
   getStreamingPartial,
 } from "./core/streaming.js";
+import { logger } from "@/services/logger";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -116,7 +117,7 @@ function useMermaid(chart: string, id: string) {
         setSvg(svg);
       } catch (err) {
         if (requestIdRef.current !== currentId) return;
-        console.error("Mermaid render error:", err);
+        logger.error("MermaidDiagram", "Mermaid render error", err);
         setError(true);
       }
     }

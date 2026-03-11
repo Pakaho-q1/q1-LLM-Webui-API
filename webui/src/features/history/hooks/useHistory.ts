@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '@/services/api.service';
 import { useSSE } from '../../../contexts/SSEContext';
 import { historyKey, sessionsKey } from '@/services/dataClient';
+import { useFetch } from '@/contexts/FetchContext';
 
 interface SessionItem {
   id: string;
@@ -34,6 +34,7 @@ const extractErrorMessage = (err: unknown, fallback: string) =>
 
 export const useHistory = () => {
   const { setCurrentConversation } = useSSE();
+  const { apiFetch } = useFetch();
   const queryClient = useQueryClient();
 
   const sessionsQuery = useQuery({

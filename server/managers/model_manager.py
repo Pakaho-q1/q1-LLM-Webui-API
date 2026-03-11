@@ -3,6 +3,7 @@ import re
 import threading
 import time
 import uuid
+from urllib.parse import unquote, urlsplit
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -24,9 +25,7 @@ class DownloadManager:
 
     def add(self, url):
         job_id = str(uuid.uuid4())
-        filename = url.split("/")[-1]
-        if "?" in filename:
-            filename = filename.split("?")[0]
+        filename = self._safe_filename_from_url(url)
         job = {
             "id": job_id,
             "url": url,
@@ -45,6 +44,17 @@ class DownloadManager:
         self._start_worker_if_possible()
         return job_id
 
+    def _safe_filename_from_url(self, url: str) -> str:
+        parsed = urlsplit(url)
+        raw_name = Path(unquote(parsed.path or "")).name
+        candidate = raw_name or f"model-{uuid.uuid4().hex}.gguf"
+        normalized = re.sub(r"[^A-Za-z0-9._-]", "_", candidate).strip("._")
+        if not normalized:
+            normalized = f"model-{uuid.uuid4().hex}.gguf"
+        if not normalized.lower().endswith(".gguf"):
+            normalized = f"{normalized}.gguf"
+        return normalized
+
     def _start_worker_if_possible(self):
         with self.lock:
             if len(self.active) >= self.max_workers or not self.queue:
@@ -57,7 +67,13 @@ class DownloadManager:
 
     def _worker(self, job):
         job["status"] = "downloading"
-        save_path = self.models_dir / job["filename"]
+        save_path = (self.models_dir / job["filename"]).resolve()
+        try:
+            save_path.relative_to(self.models_dir.resolve())
+        except ValueError:
+            job["error"] = "Invalid download target path"
+            job["status"] = "error"
+            return
         downloaded = 0
         headers = {}
         if save_path.exists():

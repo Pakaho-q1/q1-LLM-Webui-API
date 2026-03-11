@@ -5,6 +5,7 @@ import uuid
 import time
 import hashlib
 import math
+import os
 import logging
 import threading
 from pathlib import Path
@@ -37,7 +38,7 @@ class MyLocalLLM(LLMBase):
 
     def generate_response(self, messages: list, **kwargs) -> str:
         core = self._get_core_engine()
-        if not hasattr(core, "llm") or core.llm is None:
+        if hasattr(core, "is_loaded") and not core.is_loaded():
             return ""
         params = {"max_tokens": kwargs.get("max_tokens", 512), "temperature": 0.0}
         return core.generate_json(messages, params)
@@ -177,7 +178,8 @@ class HistoryManager:
             },
             "llm": {
                 "provider": "openai",
-                "config": {"api_key": "dummy_key", "model": "gpt-3.5-turbo"},
+                # mem0 requires this section, but runtime generation is overridden by MyLocalLLM below.
+                "config": {"api_key": os.environ.get("MEM0_PLACEHOLDER_API_KEY", "local-not-used"), "model": "gpt-3.5-turbo"},
             },
         }
         self.memory = Memory.from_config(config)
@@ -466,7 +468,12 @@ class HistoryManager:
                 ),
             )
         except sqlite3.IntegrityError:
-            pass
+            logger.warning(
+                "Skipped duplicate message insert for conversation '%s' (request_id=%s, message_id=%s)",
+                conv_id,
+                request_id,
+                msg_id,
+            )
         else:
             conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, conv_id))
             conn.commit()
@@ -484,7 +491,7 @@ class HistoryManager:
             self._get_conn()
             .execute(
                 """
-            SELECT id, role, content, tokens, created_at, metadata
+            SELECT id, message_id, role, content, tokens, created_at, metadata
             FROM messages
             WHERE conv_id=? AND is_archived=0
             ORDER BY created_at ASC
@@ -496,9 +503,146 @@ class HistoryManager:
         result: List[Dict[str, Any]] = []
         for r in rows:
             item = dict(r)
+            item["id"] = item.get("message_id") or item.get("id")
+            item.pop("message_id", None)
             item["metadata"] = self._parse_metadata(item.get("metadata"))
             result.append(item)
         return result
+
+    def _find_message_row(self, conv_id: str, message_key: str) -> Optional[sqlite3.Row]:
+        if not message_key:
+            return None
+        return (
+            self._get_conn()
+            .execute(
+                """
+                SELECT id, message_id, role, content, metadata
+                FROM messages
+                WHERE conv_id=? AND (message_id=? OR id=?)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (conv_id, message_key, message_key),
+            )
+            .fetchone()
+        )
+
+    def update_message_content(self, conv_id: str, message_key: str, content: str) -> bool:
+        row = self._find_message_row(conv_id, message_key)
+        if row is None:
+            return False
+
+        clean_content = (content or "").strip()
+        if not clean_content:
+            return False
+
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE messages SET content=?, tokens=? WHERE id=?",
+            (clean_content, self._count_tokens(clean_content), row["id"]),
+        )
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (time.time(), conv_id))
+        conn.commit()
+        return True
+
+    def delete_message(self, conv_id: str, message_key: str) -> bool:
+        row = self._find_message_row(conv_id, message_key)
+        if row is None:
+            return False
+
+        metadata = self._parse_metadata(row["metadata"])
+        candidate_file_ids = self._extract_file_ids(metadata)
+
+        conn = self._get_conn()
+        conn.execute("DELETE FROM messages WHERE id=?", (row["id"],))
+        conn.execute("UPDATE sessions SET updated_at=? WHERE id=?", (time.time(), conv_id))
+        conn.commit()
+
+        if candidate_file_ids:
+            other_rows = conn.execute(
+                "SELECT metadata FROM messages WHERE conv_id=?",
+                (conv_id,),
+            ).fetchall()
+            still_used: Set[str] = set()
+            for item in other_rows:
+                still_used.update(self._extract_file_ids(self._parse_metadata(item["metadata"])))
+            self._delete_local_openai_files(candidate_file_ids - still_used)
+
+        return True
+
+    def sync_conversation_memory_index(self, conv_id: str) -> None:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM messages
+            WHERE conv_id=? AND is_archived=0
+            ORDER BY created_at ASC
+            """,
+            (conv_id,),
+        ).fetchall()
+
+        interactions: List[List[Dict[str, Any]]] = []
+        i = 0
+        while i < len(rows) - 1:
+            current = rows[i]
+            nxt = rows[i + 1]
+            if current["role"] == "user" and nxt["role"] == "assistant":
+                interaction = [
+                    {"role": "user", "content": str(current["content"] or "")},
+                    {"role": "assistant", "content": str(nxt["content"] or "")},
+                ]
+                if self.should_store_long_term(interaction):
+                    interactions.append(interaction)
+                i += 2
+                continue
+            i += 1
+
+        valid_hashes: Set[str] = set()
+        now = time.time()
+        for interaction in interactions:
+            user_content = interaction[0]["content"].strip()
+            if len(user_content) < MIN_LTM_USER_LENGTH:
+                continue
+            h = self._content_hash(user_content)
+            valid_hashes.add(h)
+            existing = conn.execute(
+                "SELECT id FROM semantic_memories WHERE conv_id=? AND content_hash=?",
+                (conv_id, h),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE semantic_memories SET content=?, updated_at=? WHERE id=?",
+                    (user_content, now, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO semantic_memories
+                        (id, conv_id, content, content_hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), conv_id, user_content, h, now, now),
+                )
+                try:
+                    try:
+                        self.memory.add(interaction, run_id=conv_id)
+                    except TypeError:
+                        self.memory.add(interaction, user_id=conv_id)
+                except Exception:
+                    logger.warning("Failed to upsert vector memory for conv_id=%s", conv_id, exc_info=True)
+
+        if valid_hashes:
+            placeholders = ",".join("?" for _ in valid_hashes)
+            conn.execute(
+                f"DELETE FROM semantic_memories WHERE conv_id=? AND content_hash NOT IN ({placeholders})",
+                (conv_id, *sorted(valid_hashes)),
+            )
+        else:
+            conn.execute("DELETE FROM semantic_memories WHERE conv_id=?", (conv_id,))
+
+        conn.execute("DELETE FROM episodic_facts WHERE conv_id=?", (conv_id,))
+        conn.commit()
 
     def get_working_memory(self, conv_id: str, max_tokens: int) -> List[Dict[str, Any]]:
 
@@ -682,7 +826,10 @@ class HistoryManager:
                 "WHERE content_hash=? AND conv_id=?",
                 (h, conv_id),
             ).fetchone()
-            created_at = meta["created_at"] if meta else now
+            if not meta:
+                # Ignore stale vector entries that no longer exist in SQL memory index.
+                continue
+            created_at = meta["created_at"]
             recency = self._recency_score(created_at, now)
             combined = vector_score * recency
             ranked.append(

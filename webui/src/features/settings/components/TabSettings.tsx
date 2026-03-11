@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSettings as useSettingsContext } from '@/services/SettingsContext';
 import { useSettings as usePresetLogic } from '../hooks/useSettings';
+import { useProviderManager } from '../hooks/useProviderManager';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Combobox } from '@/components/ui/Combobox';
 import { Modal } from '@/components/ui/Modal';
 import { X, Save } from 'lucide-react';
+import { ProviderName } from '@/types/provider.types';
+import { useSystemStore } from '@/services/system.store';
 
 interface SettingSliderProps {
   label: string;
@@ -78,6 +81,19 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
 
 export const TabSettings: React.FC = () => {
   const { settings, updateSetting } = useSettingsContext();
+  const providerSupportedChatParams = useSystemStore(
+    (state) => state.providerSupportedChatParams,
+  );
+  const canonicalChatParams = useSystemStore((state) => state.canonicalChatParams);
+  const providerFeatures = useSystemStore((state) => state.providerFeatures);
+  const {
+    current: currentProviderData,
+    capabilities,
+    isSwitching,
+    switchProvider,
+    error: providerError,
+    clearError: clearProviderError,
+  } = useProviderManager();
   const {
     presets,
     error,
@@ -92,17 +108,106 @@ export const TabSettings: React.FC = () => {
   const [selectedDropdown, setSelectedDropdown] = useState('');
   const [presetToDelete, setPresetToDelete] = useState<string | null>(null);
   const [presetToUpdate, setPresetToUpdate] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderName>('local');
+  const [providerConfigDraft, setProviderConfigDraft] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!currentProviderData) return;
+    setSelectedProvider(currentProviderData.provider);
+    const draft: Record<string, string> = {};
+    Object.entries(currentProviderData.config || {}).forEach(([key, value]) => {
+      if (key === 'has_api_key') return;
+      draft[key] = typeof value === 'string' ? value : String(value ?? '');
+    });
+    setProviderConfigDraft(draft);
+  }, [currentProviderData]);
+
+  const activeSchema = useMemo(() => {
+    const schema = currentProviderData?.config_schema || capabilities?.config_schema || {};
+    return (schema as Record<string, any>)[selectedProvider] || { fields: [], description: '' };
+  }, [capabilities?.config_schema, currentProviderData?.config_schema, selectedProvider]);
+
+  const combinedError = providerError || error;
+  const supports = (param: string) => providerSupportedChatParams.includes(param);
+  const unsupportedCanonicalParams = useMemo(
+    () =>
+      (canonicalChatParams || []).filter(
+        (p) => !providerSupportedChatParams.includes(p),
+      ),
+    [canonicalChatParams, providerSupportedChatParams],
+  );
 
   return (
     <div className="pb-10">
-      {error && (
+      {combinedError && (
         <div className="mb-3 flex animate-[fadeIn_0.2s_both] items-center justify-between rounded-lg border border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-3.5 py-2.5 text-[0.83rem] text-[var(--danger)]">
-          <span>{error}</span>
-          <button onClick={clearError} className="text-[var(--danger)]">
+          <span>{combinedError}</span>
+          <button
+            onClick={() => {
+              clearError();
+              clearProviderError();
+            }}
+            className="text-[var(--danger)]"
+          >
             <X size={14} />
           </button>
         </div>
       )}
+
+      <Section title="Provider">
+        <div className="mb-3">
+          <Combobox
+            className="w-full"
+            options={[
+              { value: 'local', searchText: 'local', label: <span>Local</span> },
+              { value: 'ollama', searchText: 'ollama', label: <span>Ollama</span> },
+              { value: 'openai', searchText: 'openai', label: <span>OpenAI</span> },
+            ]}
+            value={selectedProvider}
+            onChange={(value) => setSelectedProvider(value as ProviderName)}
+            placeholder="Select provider..."
+          />
+        </div>
+        {activeSchema.description && (
+          <p className="mb-3 text-[0.78rem] text-[var(--text-tertiary)]">
+            {activeSchema.description}
+          </p>
+        )}
+        {(activeSchema.fields || []).map((field: any) => (
+          <div key={field.key} className="mb-2.5">
+            <label className="mb-1 block text-[0.78rem] font-medium text-[var(--text-secondary)]">
+              {field.key}
+              {field.required ? ' *' : ''}
+            </label>
+            <input
+              type={field.type === 'secret' ? 'password' : 'text'}
+              value={providerConfigDraft[field.key] ?? ''}
+              placeholder={field.default || ''}
+              onChange={(e) =>
+                setProviderConfigDraft((prev) => ({ ...prev, [field.key]: e.target.value }))
+              }
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-base)] px-3 py-2 text-[0.83rem] text-[var(--text-primary)]"
+            />
+          </div>
+        ))}
+        <button
+          onClick={() => switchProvider(selectedProvider, providerConfigDraft)}
+          disabled={isSwitching}
+          className="mt-1 rounded-lg bg-[var(--accent)] px-3.5 py-2 text-[0.8rem] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          {isSwitching ? 'Applying...' : 'Apply Provider'}
+        </button>
+        {currentProviderData?.supported_chat_params?.length ? (
+          <p className="mt-2 text-[0.75rem] text-[var(--text-tertiary)]">
+            Supported chat params: {currentProviderData.supported_chat_params.join(', ')}
+          </p>
+        ) : null}
+        {unsupportedCanonicalParams.length > 0 && (
+          <p className="mt-1 text-[0.75rem] text-[var(--warning)]">
+            Disabled for this provider: {unsupportedCanonicalParams.join(', ')}
+          </p>
+        )}
+      </Section>
 
       <Section title="Presets">
         <div className="mb-2.5">
@@ -237,83 +342,100 @@ export const TabSettings: React.FC = () => {
       </Section>
 
       <Section title="Sampling">
-        <SettingSlider
-          label="Temperature"
-          value={settings.temperature}
-          min={0}
-          max={2}
-          step={0.05}
-          onChange={(v) => updateSetting('temperature', v)}
-          tooltip="Randomness: lower=focused, higher=creative"
-        />
-        <SettingSlider
-          label="Max Tokens"
-          value={settings.maxTokens}
-          min={128}
-          max={8192}
-          step={128}
-          onChange={(v) => updateSetting('maxTokens', v)}
-          tooltip="Maximum tokens to generate per response"
-        />
-        <SettingSlider
-          label="Top P"
-          value={settings.topP}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(v) => updateSetting('topP', v)}
-          tooltip="Nucleus sampling threshold"
-        />
-        <SettingSlider
-          label="Top K"
-          value={settings.topK}
-          min={0}
-          max={100}
-          step={1}
-          onChange={(v) => updateSetting('topK', v)}
-          tooltip="Limit vocabulary to top K tokens"
-        />
+        {supports('temperature') && (
+          <SettingSlider
+            label="Temperature"
+            value={settings.temperature}
+            min={0}
+            max={2}
+            step={0.05}
+            onChange={(v) => updateSetting('temperature', v)}
+            tooltip="Randomness: lower=focused, higher=creative"
+          />
+        )}
+        {supports('max_tokens') && (
+          <SettingSlider
+            label="Max Tokens"
+            value={settings.maxTokens}
+            min={128}
+            max={8192}
+            step={128}
+            onChange={(v) => updateSetting('maxTokens', v)}
+            tooltip="Maximum tokens to generate per response"
+          />
+        )}
+        {supports('top_p') && (
+          <SettingSlider
+            label="Top P"
+            value={settings.topP}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => updateSetting('topP', v)}
+            tooltip="Nucleus sampling threshold"
+          />
+        )}
+        {supports('top_k') && (
+          <SettingSlider
+            label="Top K"
+            value={settings.topK}
+            min={0}
+            max={100}
+            step={1}
+            onChange={(v) => updateSetting('topK', v)}
+            tooltip="Limit vocabulary to top K tokens"
+          />
+        )}
       </Section>
 
       <Section title="Penalties">
-        <SettingSlider
-          label="Min P"
-          value={settings.minP}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(v) => updateSetting('minP', v)}
-          tooltip="Minimum probability relative to top token"
-        />
-        <SettingSlider
-          label="Repeat Penalty"
-          value={settings.repeatPenalty}
-          min={1}
-          max={2}
-          step={0.05}
-          onChange={(v) => updateSetting('repeatPenalty', v)}
-          tooltip="Discourage repeating same phrases"
-        />
-        <SettingSlider
-          label="Presence Penalty"
-          value={settings.presencePenalty}
-          min={-2}
-          max={2}
-          step={0.1}
-          onChange={(v) => updateSetting('presencePenalty', v)}
-          tooltip="Encourage talking about new topics"
-        />
-        <SettingSlider
-          label="Frequency Penalty"
-          value={settings.frequencyPenalty}
-          min={-2}
-          max={2}
-          step={0.1}
-          onChange={(v) => updateSetting('frequencyPenalty', v)}
-          tooltip="Reduce repetition by frequency"
-        />
+        {supports('min_p') && (
+          <SettingSlider
+            label="Min P"
+            value={settings.minP}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => updateSetting('minP', v)}
+            tooltip="Minimum probability relative to top token"
+          />
+        )}
+        {supports('repeat_penalty') && (
+          <SettingSlider
+            label="Repeat Penalty"
+            value={settings.repeatPenalty}
+            min={1}
+            max={2}
+            step={0.05}
+            onChange={(v) => updateSetting('repeatPenalty', v)}
+            tooltip="Discourage repeating same phrases"
+          />
+        )}
+        {supports('presence_penalty') && (
+          <SettingSlider
+            label="Presence Penalty"
+            value={settings.presencePenalty}
+            min={-2}
+            max={2}
+            step={0.1}
+            onChange={(v) => updateSetting('presencePenalty', v)}
+            tooltip="Encourage talking about new topics"
+          />
+        )}
+        {supports('frequency_penalty') && (
+          <SettingSlider
+            label="Frequency Penalty"
+            value={settings.frequencyPenalty}
+            min={-2}
+            max={2}
+            step={0.1}
+            onChange={(v) => updateSetting('frequencyPenalty', v)}
+            tooltip="Reduce repetition by frequency"
+          />
+        )}
       </Section>
 
+      {providerFeatures.local_model_lifecycle && (
       <Section title="Hardware (Requires Reload)">
         <p className="-mt-1.5 mb-3 text-[0.76rem] text-[var(--text-tertiary)]">
           Changes take effect after model reload.
@@ -355,6 +477,7 @@ export const TabSettings: React.FC = () => {
           tooltip="Tokens to process in parallel"
         />
       </Section>
+      )}
     </div>
   );
 };

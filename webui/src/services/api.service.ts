@@ -1,4 +1,10 @@
-import { ModelItem } from '../types/chat.types';
+import { ChatStreamMetrics, ModelItem } from '../types/chat.types';
+import {
+  ProviderCapabilitiesResponse,
+  ProviderCurrentResponse,
+  ProviderSetPayload,
+  ProviderSetResponse,
+} from '../types/provider.types';
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 export const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000/ws';
@@ -29,7 +35,7 @@ export interface OpenAIChatMessage {
 }
 
 export interface OpenAIChatCompletionRequest {
-  model: string;
+  model?: string;
   messages: OpenAIChatMessage[];
   stream?: boolean;
   temperature?: number;
@@ -189,7 +195,9 @@ export const streamOpenAIChatCompletion = async (
   opts: {
     signal?: AbortSignal;
     onDelta: (chunk: string) => void;
+    onMetrics?: (metrics: ChatStreamMetrics) => void;
     onDone?: () => void;
+    onWarnings?: (warnings: { unsupportedParams: string[]; invalidParams: string[] }) => void;
   },
 ): Promise<void> => {
   const response = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -211,6 +219,21 @@ export const streamOpenAIChatCompletion = async (
       '/v1/chat/completions',
       payload,
     );
+  }
+
+  const unsupportedRaw = response.headers.get('X-Unsupported-Params') || '';
+  const invalidRaw = response.headers.get('X-Invalid-Params') || '';
+  const splitCsv = (value: string) =>
+    value
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+  const headerWarnings = {
+    unsupportedParams: splitCsv(unsupportedRaw),
+    invalidParams: splitCsv(invalidRaw),
+  };
+  if (headerWarnings.unsupportedParams.length > 0 || headerWarnings.invalidParams.length > 0) {
+    opts.onWarnings?.(headerWarnings);
   }
 
   const reader = response.body.getReader();
@@ -244,6 +267,9 @@ export const streamOpenAIChatCompletion = async (
         const payload = JSON.parse(raw);
         if (payload?.error?.message) {
           throw new ApiError(payload.error.message, 500, '/v1/chat/completions', payload);
+        }
+        if (payload?.metrics && typeof payload.metrics === 'object') {
+          opts.onMetrics?.(payload.metrics as ChatStreamMetrics);
         }
 
         const delta = payload?.choices?.[0]?.delta ?? {};
@@ -289,3 +315,17 @@ export const fetchModels = async (): Promise<ModelItem[]> => {
     quant: item.object || 'model',
   }));
 };
+
+export const fetchProviderCurrent = async (): Promise<ProviderCurrentResponse> =>
+  apiFetch<ProviderCurrentResponse>('/api/provider/current', { method: 'GET' });
+
+export const updateProviderCurrent = async (
+  payload: ProviderSetPayload,
+): Promise<ProviderSetResponse> =>
+  apiFetch<ProviderSetResponse>('/api/provider/current', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+
+export const fetchProviderCapabilities = async (): Promise<ProviderCapabilitiesResponse> =>
+  apiFetch<ProviderCapabilitiesResponse>('/api/providers/capabilities', { method: 'GET' });

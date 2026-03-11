@@ -17,8 +17,6 @@
 **.github/
 **.vscode/
 **.idea/
-**upload_to_github.py
-**git-upload-config.json
 **llama_cpp/
 /server/llama_cpp/
 **README.md

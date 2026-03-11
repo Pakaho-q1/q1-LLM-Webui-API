@@ -4,7 +4,7 @@ import { useSystemStore } from './system.store';
 
 export const SystemMonitor: React.FC = () => {
   const { apiFetch } = useFetch();
-  const setStatus = useSystemStore((state) => state.setStatus);
+  const setModelStatus = useSystemStore((state) => state.setModelStatus);
 
   const fetchGlobalStatus = useCallback(async () => {
     try {
@@ -17,15 +17,18 @@ export const SystemMonitor: React.FC = () => {
         suppressGlobalError: true,
       });
 
-      setStatus({
-        currentModel: data.name || data.model || '',
-        isModelRunning: Boolean(data.running),
-        isModelLoading: Boolean(data.loading),
-      });
+      setModelStatus(
+        {
+          currentModel: data.name || data.model || '',
+          isModelRunning: Boolean(data.running),
+          isModelLoading: Boolean(data.loading),
+        },
+        { source: 'sse', timestamp: Date.now() },
+      );
     } catch (err) {
       console.warn('System monitor failed to fetch status');
     }
-  }, [apiFetch, setStatus]);
+  }, [apiFetch, setModelStatus]);
 
   useEffect(() => {
     fetchGlobalStatus();

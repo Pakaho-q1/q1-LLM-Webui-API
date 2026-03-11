@@ -36,6 +36,7 @@ export interface OpenAIChatCompletionRequest {
   max_tokens?: number;
   top_p?: number;
   stop?: string | string[];
+  request_id?: string;
   [key: string]: unknown;
 }
 
@@ -215,6 +216,7 @@ export const streamOpenAIChatCompletion = async (
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let reasoningOpen = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -244,9 +246,26 @@ export const streamOpenAIChatCompletion = async (
           throw new ApiError(payload.error.message, 500, '/v1/chat/completions', payload);
         }
 
-        const chunk = payload?.choices?.[0]?.delta?.content;
-        if (typeof chunk === 'string' && chunk.length > 0) {
-          opts.onDelta(chunk);
+        const delta = payload?.choices?.[0]?.delta ?? {};
+        const reasoningChunk = delta.reasoning ?? delta.thinking ?? delta.thought;
+        const contentChunk = delta.content;
+
+        if (typeof reasoningChunk === 'string' && reasoningChunk.length > 0) {
+          if (!reasoningOpen) {
+            reasoningOpen = true;
+            opts.onDelta(`<thinking>${reasoningChunk}`);
+          } else {
+            opts.onDelta(reasoningChunk);
+          }
+        }
+
+        if (typeof contentChunk === 'string' && contentChunk.length > 0) {
+          if (reasoningOpen) {
+            reasoningOpen = false;
+            opts.onDelta(`</thinking>${contentChunk}`);
+          } else {
+            opts.onDelta(contentChunk);
+          }
         }
       } catch (err) {
         if (err instanceof ApiError) throw err;
@@ -254,6 +273,9 @@ export const streamOpenAIChatCompletion = async (
     }
   }
 
+  if (reasoningOpen) {
+    opts.onDelta('</thinking>');
+  }
   opts.onDone?.();
 };
 

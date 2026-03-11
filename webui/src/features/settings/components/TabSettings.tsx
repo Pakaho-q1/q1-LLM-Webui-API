@@ -110,6 +110,7 @@ export const TabSettings: React.FC = () => {
             className="w-full"
             options={presets.map((p) => ({
               value: p.name,
+              searchText: p.name,
               label: (
                 <span className="text-[0.83rem] text-[var(--text-primary)]">
                   {p.name}

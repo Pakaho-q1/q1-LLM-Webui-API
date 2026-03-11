@@ -1,5 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useHistory } from '../hooks/useHistory';
+import type { HistoryMessage } from '../hooks/useHistory';
+import {
+  getHistoryCache,
+  isHistoryFresh,
+} from '@/services/dataClient';
 import { Modal } from '@/components/ui/Modal';
 import { useSSE } from '@/contexts/SSEContext';
 import { useChatStore } from '@/features/chat/store/chat.store';
@@ -20,15 +26,17 @@ export const ChatHistoryTab: React.FC = () => {
     sessions,
     loading,
     error,
-    fetchSessions,
     renameSession,
     deleteSession,
     getChatHistory,
     lastSessionKey,
   } = useHistory();
+  const queryClient = useQueryClient();
   const { currentConversation, setCurrentConversation } = useSSE();
   const clearMessages = useChatStore((state) => state.clearMessages);
   const setMessages = useChatStore((state) => state.setMessages);
+  const messages = useChatStore((state) => state.messages);
+  const isGenerating = useChatStore((state) => state.isGenerating);
 
   const [selected, setSelected] = useState<string | null>(() =>
     localStorage.getItem(lastSessionKey),
@@ -90,10 +98,6 @@ export const ChatHistoryTab: React.FC = () => {
     });
 
   useEffect(() => {
-    fetchSessions();
-  }, [fetchSessions]);
-
-  useEffect(() => {
     setPage(1);
   }, [search]);
 
@@ -102,11 +106,28 @@ export const ChatHistoryTab: React.FC = () => {
     const savedId = localStorage.getItem(lastSessionKey);
     if (savedId && sessions.some((s) => s.id === savedId) && !selected) {
       setSelected(savedId);
-      getChatHistory(savedId).then((history) => {
-        setMessages(mapHistoryToInternalMessages(history, savedId));
-      });
+      if (messages.length === 0 && !isGenerating) {
+        const cached = getHistoryCache<HistoryMessage[]>(queryClient, savedId);
+        const fresh = isHistoryFresh(queryClient, savedId);
+        if (cached && cached.length > 0) {
+          setMessages(mapHistoryToInternalMessages(cached, savedId));
+          if (fresh) return;
+        }
+        getChatHistory(savedId).then((history) => {
+          setMessages(mapHistoryToInternalMessages(history, savedId));
+        });
+      }
     }
-  }, [sessions, getChatHistory, lastSessionKey, selected, setMessages]);
+  }, [
+    sessions,
+    getChatHistory,
+    lastSessionKey,
+    selected,
+    setMessages,
+    messages.length,
+    isGenerating,
+    queryClient,
+  ]);
 
   useEffect(() => {
     if (
@@ -121,8 +142,7 @@ export const ChatHistoryTab: React.FC = () => {
   useEffect(() => {
     if (!currentConversation) return;
     if (sessions.some((s) => s.id === currentConversation)) return;
-    fetchSessions();
-  }, [currentConversation, sessions, fetchSessions]);
+  }, [currentConversation, sessions]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return sessions;
@@ -136,6 +156,12 @@ export const ChatHistoryTab: React.FC = () => {
 
   const handleSelect = async (id: string) => {
     setSelected(id);
+    const cached = getHistoryCache<HistoryMessage[]>(queryClient, id);
+    const fresh = isHistoryFresh(queryClient, id);
+    if (cached && cached.length > 0) {
+      setMessages(mapHistoryToInternalMessages(cached, id));
+    }
+    if (fresh) return;
     const history = await getChatHistory(id);
     setMessages(mapHistoryToInternalMessages(history, id));
   };

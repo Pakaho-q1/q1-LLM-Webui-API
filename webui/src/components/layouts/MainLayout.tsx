@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { ChatContainer } from '@/features/chat/components/ChatContainer';
-import { useModelManager } from '@/features/models/hooks/useModelManager';
+import { useModelActions, useModelCatalog, useModelStatus } from '@/features/models/hooks/useModelManager';
 import { useMainLayout } from './hooks/useMainLayout';
 import { useSettings } from '@/services/SettingsContext';
 import { ConnectionState, useSSE } from '@/contexts/SSEContext';
@@ -36,9 +36,11 @@ export const MainLayout: React.FC = () => {
   >(null);
   const { dark, toggle } = useTheme();
 
-  const { localModels, isLoadingModels, unloadModel, loadModel } =
-    useModelManager();
-  const { currentModel, isModelRunning, isModelLoading } = useMainLayout();
+  const { localModels, isLoadingModels } = useModelCatalog();
+  const { loadModel, unloadModel } = useModelActions();
+  useModelStatus();
+  const { currentModel, isModelRunning, isModelLoading, modelState, modelOperation } =
+    useMainLayout();
   const { settings } = useSettings();
   const { isConnected, connectionState } = useSSE();
 
@@ -65,7 +67,7 @@ export const MainLayout: React.FC = () => {
     if (!selectedModel) return;
     setIsLoadingAction('load');
     try {
-      await unloadModel();
+      await unloadModel({ preserveForLoad: { targetModel: selectedModel } });
       await loadModel(selectedModel, {
         n_ctx: settings.nCtx,
         n_gpu_layers: settings.nGpuLayers,
@@ -87,6 +89,18 @@ export const MainLayout: React.FC = () => {
       setIsLoadingAction(null);
     }
   };
+
+  const displayModelName =
+    modelOperation?.targetModel || currentModel || '';
+
+  const statusLabel =
+    modelState === 'loading'
+      ? 'Loading'
+      : modelState === 'unloading'
+        ? 'Unloading'
+        : isModelRunning
+          ? displayModelName.split('/').pop() || 'Running'
+          : 'No Model';
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
@@ -149,13 +163,9 @@ export const MainLayout: React.FC = () => {
                 )}
                 <span
                   className="truncate"
-                  title={isModelRunning ? currentModel || 'Running' : undefined}
+                  title={displayModelName || undefined}
                 >
-                  {isModelLoading
-                    ? 'Loading'
-                    : isModelRunning
-                      ? currentModel?.split('/').pop() || 'Running'
-                      : 'No Model'}
+                  {statusLabel}
                 </span>
               </div>
             </div>
@@ -165,6 +175,7 @@ export const MainLayout: React.FC = () => {
                 className="w-full text-sm"
                 options={localModels.map((m) => ({
                   value: m.name,
+                  searchText: m.name,
                   label: (
                     <span
                       className="text-[0.8rem] text-[var(--text-primary)]"

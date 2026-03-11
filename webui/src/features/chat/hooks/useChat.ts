@@ -9,6 +9,8 @@ import {
   uploadOpenAIFile,
 } from '@/services/api.service';
 import { useSSE } from '@/contexts/SSEContext';
+import { useQueryClient } from '@tanstack/react-query';
+import { sessionsKey } from '@/services/dataClient';
 import {
   Attachment,
   InternalMessage,
@@ -24,6 +26,7 @@ export const useChat = () => {
   const DEFAULT_NEW_SESSION_TITLE = 'New Chat';
   const streamAbortRef = useRef<AbortController | null>(null);
   const { currentConversation, setCurrentConversation } = useSSE();
+  const queryClient = useQueryClient();
 
   const {
     messages,
@@ -71,6 +74,7 @@ export const useChat = () => {
       let userMessageId: string | null = null;
       let shouldAutoRenameAfterSuccess = false;
       let pendingAutoTitle = '';
+      const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       try {
         setChatError(null);
         let conversationId = currentConversation;
@@ -112,6 +116,7 @@ export const useChat = () => {
             pendingAutoTitle !== DEFAULT_NEW_SESSION_TITLE;
           setCurrentConversation?.(conversationId);
           localStorage.setItem('v1_last_session_id', conversationId);
+          queryClient.invalidateQueries({ queryKey: sessionsKey });
         }
 
         let history = useChatStore
@@ -186,6 +191,7 @@ export const useChat = () => {
             messages: history,
             stream: true,
             conversation_id: conversationId,
+            request_id: requestId,
             ...params,
             params: {
               ...(params || {}),
@@ -210,6 +216,7 @@ export const useChat = () => {
             method: 'PATCH',
             body: JSON.stringify({ title: pendingAutoTitle }),
           });
+          queryClient.invalidateQueries({ queryKey: sessionsKey });
         }
       } catch (err) {
         if (userMessageId) removeMessageById(userMessageId);
@@ -226,6 +233,7 @@ export const useChat = () => {
       removeMessageById,
       setCurrentConversation,
       DEFAULT_NEW_SESSION_TITLE,
+      queryClient,
       setGenerating,
       setChatError,
       stopAssistantTyping,

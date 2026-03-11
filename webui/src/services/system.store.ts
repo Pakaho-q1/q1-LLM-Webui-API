@@ -14,6 +14,14 @@ interface SystemState {
   currentModel: string;
   isModelRunning: boolean;
   isModelLoading: boolean;
+  modelState: 'idle' | 'loading' | 'running' | 'unloading' | 'error';
+  modelOperation: {
+    id: string;
+    type: 'load' | 'unload';
+    targetModel?: string;
+    startedAt: number;
+  } | null;
+  modelStatusVersion: number;
   isAuthRequired: boolean;
   activeSidebarTab: SidebarTab;
   pendingRequestCount: number;
@@ -22,11 +30,20 @@ interface SystemState {
   toasts: ToastItem[];
 
   setStatus: (status: Partial<SystemState>) => void;
-  setModelStatus: (status: {
-    currentModel?: string;
-    isModelRunning?: boolean;
-    isModelLoading?: boolean;
-  }) => void;
+  setModelStatus: (
+    status: {
+      currentModel?: string;
+      isModelRunning?: boolean;
+      isModelLoading?: boolean;
+    },
+    meta?: {
+      source?: 'local' | 'sse' | 'init';
+      timestamp?: number;
+      requestId?: string;
+    },
+  ) => void;
+  beginModelOperation: (type: 'load' | 'unload', targetModel?: string) => string;
+  endModelOperation: () => void;
   setAuthRequired: (required: boolean) => void;
   setActiveSidebarTab: (tab: SidebarTab) => void;
   beginRequest: (requestKey?: string) => void;
@@ -46,6 +63,9 @@ export const useSystemStore = create<SystemState>((set) => ({
   currentModel: '',
   isModelRunning: false,
   isModelLoading: false,
+  modelState: 'idle',
+  modelOperation: null,
+  modelStatusVersion: 0,
   isAuthRequired: false,
   activeSidebarTab: 'history',
   pendingRequestCount: 0,
@@ -54,13 +74,84 @@ export const useSystemStore = create<SystemState>((set) => ({
   toasts: [],
 
   setStatus: (newStatus) => set((state) => ({ ...state, ...newStatus })),
-  setModelStatus: (status) =>
-    set((state) => ({
-      ...state,
-      currentModel: status.currentModel ?? state.currentModel,
-      isModelRunning: status.isModelRunning ?? state.isModelRunning,
-      isModelLoading: status.isModelLoading ?? state.isModelLoading,
-    })),
+  setModelStatus: (status, meta) =>
+    set((state) => {
+      const timestamp = meta?.timestamp ?? Date.now();
+      if (timestamp < state.modelStatusVersion) return state;
+
+      const source = meta?.source ?? 'local';
+      const op = state.modelOperation;
+      if (source === 'local' && meta?.requestId && op?.id && meta.requestId !== op.id) {
+        return state;
+      }
+      const nextRunning = status.isModelRunning ?? state.isModelRunning;
+      const nextLoading = status.isModelLoading ?? state.isModelLoading;
+      const nextModel = status.currentModel ?? state.currentModel;
+
+      if (source === 'sse' && op) {
+        if (op.type === 'load') {
+          const incomingModel = status.currentModel ?? nextModel;
+          const target = op.targetModel ?? '';
+          const incomingEmpty = !incomingModel;
+          const mismatched = target && incomingModel && incomingModel !== target;
+          if (incomingEmpty && !nextLoading && !nextRunning) return state;
+          if (mismatched && !nextRunning) return state;
+          if (!incomingEmpty && target && incomingModel === target && nextRunning) {
+            return {
+              ...state,
+              currentModel: incomingModel,
+              isModelRunning: nextRunning,
+              isModelLoading: nextLoading,
+              modelState: 'running',
+              modelOperation: null,
+              modelStatusVersion: timestamp,
+            };
+          }
+        }
+        if (op.type === 'unload') {
+          if (nextLoading) return state;
+          if (!nextRunning && !nextLoading) {
+            return {
+              ...state,
+              currentModel: '',
+              isModelRunning: false,
+              isModelLoading: false,
+              modelState: 'idle',
+              modelOperation: null,
+              modelStatusVersion: timestamp,
+            };
+          }
+        }
+      }
+
+      const modelState: SystemState['modelState'] = nextLoading
+        ? op?.type === 'unload'
+          ? 'unloading'
+          : 'loading'
+        : nextRunning
+          ? 'running'
+          : state.lastError
+            ? 'error'
+            : 'idle';
+
+      return {
+        ...state,
+        currentModel: nextModel,
+        isModelRunning: nextRunning,
+        isModelLoading: nextLoading,
+        modelState,
+        modelStatusVersion: timestamp,
+      };
+    }),
+  beginModelOperation: (type, targetModel) => {
+    const id = `op-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    set({
+      modelOperation: { id, type, targetModel, startedAt: Date.now() },
+      modelState: type === 'unload' ? 'unloading' : 'loading',
+    });
+    return id;
+  },
+  endModelOperation: () => set({ modelOperation: null }),
   setAuthRequired: (required) => set({ isAuthRequired: required }),
   setActiveSidebarTab: (tab) => set({ activeSidebarTab: tab }),
   beginRequest: (requestKey) =>
@@ -109,6 +200,9 @@ export const useSystemStore = create<SystemState>((set) => ({
       currentModel: '',
       isModelRunning: false,
       isModelLoading: false,
+      modelState: 'idle',
+      modelOperation: null,
+      modelStatusVersion: 0,
       isAuthRequired: false,
       pendingRequestCount: 0,
       pendingRequestsByKey: {},

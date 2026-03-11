@@ -43,7 +43,14 @@ async def start_openai_sse_chat(
     async def _runner():
         try:
             async def status_cb(msg: str):
-                await app_state.put_sse_message(client_id, {"type": "status", "message": msg})
+                await app_state.put_sse_message(
+                    client_id,
+                    {
+                        "type": "status",
+                        "message": msg,
+                        "request_id": req_id,
+                    },
+                )
 
             async def chunk_cb(chunk: str):
                 openai_chunk = {
@@ -51,6 +58,7 @@ async def start_openai_sse_chat(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": app_state.llm_engine.model_name or "local-model",
+                    "request_id": req_id,
                     "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
                 }
                 await app_state.put_sse_message(client_id, {"__openai_chunk": openai_chunk})
@@ -69,6 +77,7 @@ async def start_openai_sse_chat(
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": app_state.llm_engine.model_name or "local-model",
+                "request_id": req_id,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             }
             await app_state.put_sse_message(client_id, {"__openai_chunk": final_chunk})

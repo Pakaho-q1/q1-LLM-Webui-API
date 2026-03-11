@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.dependencies import verify_api_key
@@ -34,7 +34,7 @@ async def list_models():
 
 
 @router.post("/api/models/load")
-async def load_model(payload: LoadModelRequest):
+async def load_model(payload: LoadModelRequest, request: Request):
     model_name = payload.model_path
     if not model_name:
         raise HTTPException(status_code=400, detail="model_path is required")
@@ -55,6 +55,19 @@ async def load_model(payload: LoadModelRequest):
     if not success:
         raise HTTPException(status_code=500, detail=message)
 
+    await app_state.broadcast_sse_message(
+        {
+            "type": "model_status",
+            "data": {
+                "running": True,
+                "loading": False,
+                "name": model_name,
+                "model": model_name,
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        }
+    )
+
     return {
         "status": "ok",
         "data": {
@@ -68,9 +81,21 @@ async def load_model(payload: LoadModelRequest):
 
 
 @router.post("/api/models/unload")
-async def unload_model():
+async def unload_model(request: Request):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(app_state.executor, app_state.llm_engine.unload_model)
+    await app_state.broadcast_sse_message(
+        {
+            "type": "model_status",
+            "data": {
+                "running": False,
+                "loading": False,
+                "name": "",
+                "model": "",
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        }
+    )
     return {"status": "ok"}
 
 

@@ -8,6 +8,8 @@ import React, {
   useCallback,
 } from 'react';
 import { API_BASE } from '../services/api.service';
+import { useQueryClient } from '@tanstack/react-query';
+import { historyKey, sessionsKey, setHistoryCache } from '@/services/dataClient';
 import { useSystemStore } from '@/services/system.store';
 
 enum ConnectionState {
@@ -57,6 +59,7 @@ const normalizeIncoming = (data: any): any => {
         type: 'chunk',
         content: deltaContent,
         id: data.id,
+        requestId: data.request_id,
         raw: data,
       };
     }
@@ -66,6 +69,7 @@ const normalizeIncoming = (data: any): any => {
         type: 'done',
         finish_reason: finishReason,
         id: data.id,
+        requestId: data.request_id,
         raw: data,
       };
     }
@@ -90,6 +94,7 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   const reconnectAttemptsRef = useRef(0);
   const chatListenersRef = useRef<Set<(msg: any) => void>>(new Set());
   const setModelStatus = useSystemStore((state) => state.setModelStatus);
+  const queryClient = useQueryClient();
 
   const notifyChatListeners = (data: any) => {
     chatListenersRef.current.forEach((cb) => cb(data));
@@ -103,28 +108,40 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
   const processIncoming = useCallback((data: any) => {
     if (data?.type === 'model_status' && data?.data) {
       const d = data.data as any;
-      setModelStatus({
-        currentModel: d.name || d.model || '',
-        isModelRunning: Boolean(d.running),
-        isModelLoading:
-          typeof d.loading === 'boolean'
-            ? Boolean(d.loading)
-            : Boolean(d.running) === false && Boolean(d.name || d.model),
-      });
+      setModelStatus(
+        {
+          currentModel: d.name || d.model || '',
+          isModelRunning: Boolean(d.running),
+          isModelLoading:
+            typeof d.loading === 'boolean'
+              ? Boolean(d.loading)
+              : Boolean(d.running) === false && Boolean(d.name || d.model),
+        },
+        {
+          source: 'sse',
+          timestamp: Date.now(),
+          requestId: d.request_id || data.request_id,
+        },
+      );
     }
 
     if ((data?.type === 'status' || data?.type === 'info') && data?.message) {
       const lower = String(data.message).toLowerCase();
-      if (lower.includes('loading')) setModelStatus({ isModelLoading: true });
+      if (lower.includes('loading')) {
+        setModelStatus({ isModelLoading: true }, { source: 'sse', timestamp: Date.now() });
+      }
       if (lower.includes('loaded') || lower.includes('unloaded') || lower.includes('error')) {
-        setModelStatus({
+        setModelStatus(
+          {
           isModelLoading: false,
           isModelRunning: lower.includes('loaded')
             ? true
             : lower.includes('unloaded')
               ? false
               : undefined,
-        });
+          },
+          { source: 'sse', timestamp: Date.now() },
+        );
       }
     }
 
@@ -132,18 +149,28 @@ export const SSEProvider: React.FC<{ children: ReactNode }> = ({
       setCurrentConversation((prev) =>
         prev === data.conversation_id ? null : prev,
       );
+      if (data.conversation_id) {
+        queryClient.invalidateQueries({ queryKey: historyKey(data.conversation_id) });
+      }
+      queryClient.invalidateQueries({ queryKey: sessionsKey });
     }
     if (data.type === 'session_created' && data.data?.id) {
       setCurrentConversation(data.data.id);
+      queryClient.invalidateQueries({ queryKey: sessionsKey });
     }
     if (data.type === 'chat_history' && data.conversation_id) {
       setCurrentConversation(data.conversation_id);
+      if (Array.isArray(data.data)) {
+        setHistoryCache(queryClient, data.conversation_id, data.data);
+      } else {
+        queryClient.invalidateQueries({ queryKey: historyKey(data.conversation_id) });
+      }
     }
 
     const chatTypes = ['chunk', 'done', 'error', 'status'];
     if (chatTypes.includes(data.type)) notifyChatListeners(data);
     if (data.choices && Array.isArray(data.choices)) notifyChatListeners(data);
-  }, [setModelStatus]);
+  }, [queryClient, setModelStatus]);
 
   const connect = useCallback(() => {
     if (esRef.current) return;

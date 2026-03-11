@@ -1,14 +1,30 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/services/api.service';
 import { useSettings as useSettingsContext } from '../../../services/SettingsContext';
 import { PresetData, PresetListItem } from '../../../types/chat.types';
+import { presetKey, presetsKey, STALE_TIME_MS } from '@/services/dataClient';
+
+const extractErrorMessage = (err: unknown, fallback: string) =>
+  err instanceof Error ? err.message : fallback;
 
 export const useSettings = () => {
   const { settings, updateSetting } = useSettingsContext();
+  const queryClient = useQueryClient();
 
-  const [presets, setPresets] = useState<PresetListItem[]>([]);
   const [selectedPresetName, setSelectedPresetName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+
+  const presetsQuery = useQuery({
+    queryKey: presetsKey,
+    queryFn: async () => {
+      const res = await apiFetch<{ data?: PresetListItem[] }>('/api/presets', {
+        method: 'GET',
+      });
+      return Array.isArray(res?.data) ? res.data : [];
+    },
+    staleTime: STALE_TIME_MS,
+  });
 
   const applyPresetData = useCallback(
     (data: PresetData) => {
@@ -35,50 +51,18 @@ export const useSettings = () => {
     [updateSetting],
   );
 
-  const fetchPresets = useCallback(async () => {
-    try {
-      setError(null);
-      const res = await apiFetch<{ data?: PresetListItem[] }>('/api/presets', {
-        method: 'GET',
-      });
-      const newPresets = Array.isArray(res?.data) ? res.data : [];
-      setPresets(newPresets);
-      setSelectedPresetName((prev) =>
-        prev && !newPresets.some((p) => p.name === prev) ? '' : prev,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch presets');
-    }
-  }, []);
-
-  const loadPreset = useCallback(
+  const presetFetcher = useCallback(
     async (name: string) => {
-      try {
-        if (!name.trim()) {
-          setError('Please select a preset to load');
-          return;
-        }
-
-        const presetExists = presets.some((p) => p.name === name);
-        if (!presetExists) {
-          setError(`Preset "${name}" not found. It may have been deleted.`);
-          return;
-        }
-
-        setError(null);
-        const res = await apiFetch<{ data?: PresetData }>(
-          `/api/presets/${encodeURIComponent(name)}`,
-          { method: 'GET' },
-        );
-        if (!res?.data) {
-          throw new Error('Preset data not found');
-        }
-        applyPresetData(res.data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load preset');
+      const res = await apiFetch<{ data?: PresetData }>(
+        `/api/presets/${encodeURIComponent(name)}`,
+        { method: 'GET' },
+      );
+      if (!res?.data) {
+        throw new Error('Preset data not found');
       }
+      return res.data;
     },
-    [applyPresetData, presets],
+    [],
   );
 
   const getFullParameters = useCallback(
@@ -100,6 +84,77 @@ export const useSettings = () => {
     [settings],
   );
 
+  const createPresetMutation = useMutation({
+    mutationFn: async (args: { name: string; description: string }) =>
+      apiFetch('/api/presets', {
+        method: 'POST',
+        body: JSON.stringify({
+          preset: {
+            name: args.name,
+            description: args.description,
+            system_prompt: settings.systemPrompt,
+            parameters: getFullParameters(),
+          },
+        }),
+      }),
+    onSuccess: (_res, args) => {
+      setSelectedPresetName(args.name);
+      queryClient.invalidateQueries({ queryKey: presetsKey });
+    },
+  });
+
+  const updatePresetMutation = useMutation({
+    mutationFn: async (args: { name: string; description?: string }) =>
+      apiFetch(`/api/presets/${encodeURIComponent(args.name)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          preset: {
+            name: args.name,
+            description: args.description ?? '',
+            system_prompt: settings.systemPrompt,
+            parameters: getFullParameters(),
+          },
+        }),
+      }),
+    onSuccess: (_res, args) => {
+      queryClient.invalidateQueries({ queryKey: presetKey(args.name) });
+      queryClient.invalidateQueries({ queryKey: presetsKey });
+    },
+  });
+
+  const deletePresetMutation = useMutation({
+    mutationFn: async (name: string) =>
+      apiFetch(`/api/presets/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: (_res, name) => {
+      if (selectedPresetName === name) setSelectedPresetName('');
+      queryClient.invalidateQueries({ queryKey: presetKey(name) });
+      queryClient.invalidateQueries({ queryKey: presetsKey });
+    },
+  });
+
+  const loadPreset = useCallback(
+    async (name: string) => {
+      try {
+        if (!name.trim()) {
+          setError('Please select a preset to load');
+          return;
+        }
+        setError(null);
+        const data = await queryClient.ensureQueryData({
+          queryKey: presetKey(name),
+          queryFn: () => presetFetcher(name),
+          staleTime: STALE_TIME_MS,
+        });
+        applyPresetData(data);
+      } catch (err) {
+        setError(extractErrorMessage(err, 'Failed to load preset'));
+      }
+    },
+    [applyPresetData, presetFetcher, queryClient],
+  );
+
   const createPreset = useCallback(
     async (name: string, description: string) => {
       try {
@@ -108,29 +163,17 @@ export const useSettings = () => {
           return;
         }
         setError(null);
-        await apiFetch('/api/presets', {
-          method: 'POST',
-          body: JSON.stringify({
-            preset: {
-              name,
-              description,
-              system_prompt: settings.systemPrompt,
-              parameters: getFullParameters(),
-            },
-          }),
-        });
-        setSelectedPresetName(name);
-        await fetchPresets();
+        await createPresetMutation.mutateAsync({ name, description });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create preset');
+        setError(extractErrorMessage(err, 'Failed to create preset'));
       }
     },
-    [fetchPresets, getFullParameters, settings.systemPrompt],
+    [createPresetMutation],
   );
 
   const updatePreset = useCallback(
     async (name: string, description: string = '') => {
-      const presetExists = presets.some((p) => p.name === name);
+      const presetExists = (presetsQuery.data ?? []).some((p) => p.name === name);
       if (!presetExists) {
         setError(`Preset "${name}" not found. It may have been deleted.`);
         return;
@@ -138,28 +181,17 @@ export const useSettings = () => {
 
       try {
         setError(null);
-        await apiFetch(`/api/presets/${encodeURIComponent(name)}`, {
-          method: 'PUT',
-          body: JSON.stringify({
-            preset: {
-              name,
-              description,
-              system_prompt: settings.systemPrompt,
-              parameters: getFullParameters(),
-            },
-          }),
-        });
-        await fetchPresets();
+        await updatePresetMutation.mutateAsync({ name, description });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to update preset');
+        setError(extractErrorMessage(err, 'Failed to update preset'));
       }
     },
-    [fetchPresets, getFullParameters, presets, settings.systemPrompt],
+    [presetsQuery.data, updatePresetMutation],
   );
 
   const deletePreset = useCallback(
     async (name: string) => {
-      const presetExists = presets.some((p) => p.name === name);
+      const presetExists = (presetsQuery.data ?? []).some((p) => p.name === name);
       if (!presetExists) {
         setError(`Preset "${name}" not found. It may have been already deleted.`);
         return;
@@ -167,30 +199,29 @@ export const useSettings = () => {
 
       try {
         setError(null);
-        await apiFetch(`/api/presets/${encodeURIComponent(name)}`, {
-          method: 'DELETE',
-        });
-        if (selectedPresetName === name) setSelectedPresetName('');
-        await fetchPresets();
+        await deletePresetMutation.mutateAsync(name);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete preset');
+        setError(extractErrorMessage(err, 'Failed to delete preset'));
       }
     },
-    [fetchPresets, presets, selectedPresetName],
+    [deletePresetMutation, presetsQuery.data],
   );
 
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
-  useEffect(() => {
-    fetchPresets();
-  }, [fetchPresets]);
+  const queryError = useMemo(() => {
+    if (presetsQuery.error) {
+      return extractErrorMessage(presetsQuery.error, 'Failed to fetch presets');
+    }
+    return null;
+  }, [presetsQuery.error]);
 
   return {
-    presets,
+    presets: presetsQuery.data ?? [],
     selectedPresetName,
-    error,
+    error: error ?? queryError,
     loadPreset,
     createPreset,
     updatePreset,

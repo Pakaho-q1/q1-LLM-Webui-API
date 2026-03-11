@@ -4,7 +4,6 @@
 **models/
 **.log
 **temp/
-**.bat
 **.env
 **.pyc
 **.gguf
@@ -20,7 +19,8 @@
 **.idea/
 **upload_to_github.py
 **git-upload-config.json
-**llama-b8252-bin-win-cuda-12.4-x64/
+**llama_cpp/
+/server/llama_cpp/
 **README.md
 *data/*
 **env/

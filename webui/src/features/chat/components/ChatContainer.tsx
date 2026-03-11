@@ -1,92 +1,11 @@
+// src/features/chat/components/ChatContainer.tsx
 import React, { useState } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSettings } from '@/services/SettingsContext';
 import { ChatMessagesGemini } from './ui/ChatMessagesGemini';
 import { ChatInputGemini } from './ui/ChatInputGemini';
-import { X, Sparkles, Zap, Code2, BookOpen, ArrowRight } from 'lucide-react';
-
-const QUICK_PROMPTS = [
-  {
-    icon: <Code2 size={15} />,
-    label: 'Write code',
-    prompt: 'Help me write a Python script to ',
-  },
-  {
-    icon: <Sparkles size={15} />,
-    label: 'Brainstorm',
-    prompt: 'Help me brainstorm ideas for ',
-  },
-  {
-    icon: <BookOpen size={15} />,
-    label: 'Explain',
-    prompt: 'Explain this concept simply: ',
-  },
-  {
-    icon: <Zap size={15} />,
-    label: 'Quick task',
-    prompt: 'Summarize the following: ',
-  },
-];
-
-const IdleScreen: React.FC<{ onQuickPrompt: (t: string) => void }> = ({
-  onQuickPrompt,
-}) => (
-  <div className="flex h-full w-full flex-col items-center justify-center bg-[var(--bg-base)] px-6">
-    <div className="mb-7 animate-[fadeIn_0.5s_cubic-bezier(0.16,1,0.3,1)_both]">
-      <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-[20px] bg-[linear-gradient(135deg,var(--accent)_0%,color-mix(in_srgb,var(--accent)_60%,#818cf8)_100%)] shadow-[0_8px_32px_color-mix(in_srgb,var(--accent)_35%,transparent)]">
-        <div className="absolute inset-0 animate-[shimmer_2.5s_linear_infinite] bg-[linear-gradient(120deg,transparent_20%,rgba(255,255,255,0.18)_50%,transparent_80%)] bg-[length:200%_100%]" />
-        <span className="relative text-2xl font-extrabold tracking-[-0.04em] text-white">
-          AI
-        </span>
-      </div>
-    </div>
-
-    <h1 className="m-0 animate-[fadeIn_0.5s_0.08s_both] text-center text-2xl font-bold tracking-[-0.03em] text-[var(--text-primary)]">
-      What can I help you with?
-    </h1>
-
-    <p className="mt-2.5 mb-9 max-w-[380px] animate-[fadeIn_0.5s_0.14s_both] text-center text-[0.9rem] leading-6 text-[var(--text-secondary)]">
-      Start a new chat or select a conversation from the sidebar. You can also
-      type below to begin.
-    </p>
-
-    <div className="grid w-full max-w-[460px] animate-[fadeIn_0.5s_0.2s_both] grid-cols-2 gap-2.5">
-      {QUICK_PROMPTS.map((p, i) => (
-        <button
-          key={i}
-          onClick={() => onQuickPrompt(p.prompt)}
-          className="group flex items-center gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] px-3.5 py-3 text-left text-[var(--text-primary)] shadow-[var(--shadow-sm)] transition-all duration-150 hover:-translate-y-px hover:border-[color-mix(in_srgb,var(--accent)_40%,transparent)] hover:shadow-[0_4px_16px_color-mix(in_srgb,var(--accent)_12%,transparent)]"
-        >
-          <span className="shrink-0 text-[var(--accent)] opacity-85">
-            {p.icon}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="mb-0.5 text-[0.83rem] font-semibold">{p.label}</div>
-            <div className="truncate text-[0.75rem] text-[var(--text-tertiary)]">
-              {p.prompt}…
-            </div>
-          </div>
-          <ArrowRight
-            size={13}
-            className="shrink-0 text-[var(--text-tertiary)] opacity-60"
-          />
-        </button>
-      ))}
-    </div>
-
-    <p className="mt-7 animate-[fadeIn_0.5s_0.45s_both] text-[0.77rem] text-[var(--text-tertiary)]">
-      Press{' '}
-      <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-[5px] py-px font-mono text-[0.72rem]">
-        ↵ Enter
-      </kbd>{' '}
-      to send ·{' '}
-      <kbd className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-[5px] py-px font-mono text-[0.72rem]">
-        ⇧ Shift+Enter
-      </kbd>{' '}
-      for new line
-    </p>
-  </div>
-);
+import { IdleScreen } from './ui/IdleScreen'; // เพิ่มการ Import จาก Component ที่แยก
+import { X } from 'lucide-react';
 
 export const ChatContainer: React.FC = () => {
   const {
@@ -98,6 +17,7 @@ export const ChatContainer: React.FC = () => {
     stopGeneration,
     clearError,
   } = useChat();
+
   const { settings } = useSettings();
   const [editText, setEditText] = useState('');
 
@@ -118,6 +38,10 @@ export const ChatContainer: React.FC = () => {
   const handleRetry = (msg: any) => handleSendMessage(msg.content || '');
   const handleEdit = (msg: any) => setEditText(msg.content || '');
 
+  // ตัดสินใจว่าจะโชว์หน้า Idle หรือไม่
+  // กฎ: ถ้าไม่มีข้อความ และ 'ไม่ได้กำลังประมวลผลอยู่' ให้แสดงหน้า Idle
+  const shouldShowIdle = messages.length === 0 && !isGenerating;
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-base)]">
       {error && (
@@ -132,7 +56,7 @@ export const ChatContainer: React.FC = () => {
         </div>
       )}
 
-      {messages.length === 0 ? (
+      {shouldShowIdle ? (
         <div className="flex-1 overflow-y-auto">
           <IdleScreen onQuickPrompt={(text) => setEditText(text)} />
         </div>

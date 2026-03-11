@@ -55,10 +55,16 @@ export const MessageBubble: React.FC<
               <button
                 onClick={() => handleCopyCode(codeString)}
                 className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.72rem] transition ${
-                  copiedText === codeString ? 'text-emerald-500' : 'text-white/60'
+                  copiedText === codeString
+                    ? 'text-emerald-500'
+                    : 'text-white/60'
                 }`}
               >
-                {copiedText === codeString ? <Check size={12} /> : <Copy size={12} />}
+                {copiedText === codeString ? (
+                  <Check size={12} />
+                ) : (
+                  <Copy size={12} />
+                )}
                 {copiedText === codeString ? 'Copied!' : 'Copy'}
               </button>
             </div>
@@ -90,7 +96,7 @@ export const MessageBubble: React.FC<
       table: ({ node, ...props }: any) => (
         <div className="my-4 overflow-x-auto">
           <table
-            className="min-w-full overflow-hidden rounded-lg border border-[var(--border)] border-collapse"
+            className="min-w-full border-collapse overflow-hidden rounded-lg border border-[var(--border)]"
             {...props}
           />
         </div>
@@ -104,12 +110,15 @@ export const MessageBubble: React.FC<
       ),
       th: ({ node, ...props }: any) => (
         <th
-          className="px-3.5 py-2.5 text-left text-[0.78rem] font-semibold uppercase tracking-[0.04em] text-[var(--text-secondary)]"
+          className="px-3.5 py-2.5 text-left text-[0.78rem] font-semibold tracking-[0.04em] text-[var(--text-secondary)] uppercase"
           {...props}
         />
       ),
       td: ({ node, ...props }: any) => (
-        <td className="px-3.5 py-2.5 text-[0.875rem] text-[var(--text-primary)]" {...props} />
+        <td
+          className="px-3.5 py-2.5 text-[0.875rem] text-[var(--text-primary)]"
+          {...props}
+        />
       ),
       blockquote: ({ node, ...props }: any) => (
         <blockquote
@@ -126,8 +135,10 @@ export const MessageBubble: React.FC<
       className={`group flex w-full px-2 py-1 ${isUser ? 'justify-end' : 'justify-start'} animate-[fadeIn_0.22s_cubic-bezier(0.16,1,0.3,1)_both]`}
     >
       {!isUser && (
-        <div className="mr-2.5 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--accent)_25%,transparent)] bg-[var(--accent-subtle)]">
-          <span className="text-[0.65rem] font-bold text-[var(--accent)]">AI</span>
+        <div className="mt-1 mr-2.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--accent)_25%,transparent)] bg-[var(--accent-subtle)]">
+          <span className="text-[0.65rem] font-bold text-[var(--accent)]">
+            AI
+          </span>
         </div>
       )}
 
@@ -150,19 +161,26 @@ export const MessageBubble: React.FC<
                   className={`shrink-0 ${msg.isTyping ? 'animate-[pulseDot_1.5s_ease-in-out_infinite] text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}
                 />
                 <span className="flex-1 text-left">
-                  {msg.isTyping && !formattedContent ? 'Thinking…' : 'Chain of thought'}
+                  {msg.isTyping && !formattedContent
+                    ? 'Thinking…'
+                    : 'Chain of thought'}
                 </span>
-                {isThinkingExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                {isThinkingExpanded ? (
+                  <ChevronDown size={13} />
+                ) : (
+                  <ChevronRight size={13} />
+                )}
               </button>
               {isThinkingExpanded && (
-                <div className="animate-[fadeIn_0.18s_both] whitespace-pre-wrap border-t border-[var(--border)] px-3 py-2.5 font-mono text-[0.8rem] leading-6 text-[var(--text-secondary)]">
+                <div className="animate-[fadeIn_0.18s_both] border-t border-[var(--border)] px-3 py-2.5 font-mono text-[0.8rem] leading-6 whitespace-pre-wrap text-[var(--text-secondary)]">
                   {thinkingText}
                 </div>
               )}
             </div>
           )}
 
-          {msg.attachments?.length > 0 && (
+          {/* การแก้ไข: ตรวจสอบ attachments อย่างปลอดภัย */}
+          {msg.attachments && msg.attachments.length > 0 && (
             <div className="mb-2.5 flex flex-wrap gap-2">
               {msg.attachments.map((file: any, idx: number) =>
                 file.type?.startsWith('image/') ? (
@@ -178,7 +196,9 @@ export const MessageBubble: React.FC<
                     className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[0.8rem] text-[var(--text-secondary)]"
                   >
                     <Paperclip size={13} />
-                    <span className="max-w-[180px] truncate">{file.name || 'File'}</span>
+                    <span className="max-w-[180px] truncate">
+                      {file.name || 'File'}
+                    </span>
                   </div>
                 ),
               )}

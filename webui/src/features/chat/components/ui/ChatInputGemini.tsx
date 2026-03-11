@@ -71,10 +71,7 @@ interface VoicePopupProps {
   onTranscript: (text: string) => void;
 }
 
-const VoicePopup: React.FC<VoicePopupProps> = ({
-  onClose,
-  onTranscript,
-}) => {
+const VoicePopup: React.FC<VoicePopupProps> = ({ onClose, onTranscript }) => {
   const [voiceState, setVoiceState] = useState<VoiceState>('listening');
   const [errorMsg, setErrorMsg] = useState('');
   const [amplitudes, setAmplitudes] = useState<number[]>(Array(28).fill(0));
@@ -799,16 +796,7 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
                   ? 'Connect a model to start…'
                   : 'Message… (Enter to send, Shift+Enter for new line)'
             }
-            className={`
-                flex-1 resize-none border-none bg-transparent outline-none
-                custom-scrollbar
-                py-[7px] px-2
-                font-inherit text-[0.9rem] leading-[1.6]
-                caret-[var(--accent)] transition-colors duration-200
-                ${isGenerating ? 'cursor-default text-[var(--text-tertiary)]' : 'cursor-text text-[var(--text-primary)]'}
-                placeholder:text-[var(--text-tertiary)]
-                disabled:opacity-50
-              `}
+            className={`custom-scrollbar font-inherit flex-1 resize-none border-none bg-transparent px-2 py-[7px] text-[0.9rem] leading-[1.6] caret-[var(--accent)] transition-colors duration-200 outline-none ${isGenerating ? 'cursor-default text-[var(--text-tertiary)]' : 'cursor-text text-[var(--text-primary)]'} placeholder:text-[var(--text-tertiary)] disabled:opacity-50`}
           />
 
           {/* Generating indicator inside textarea area */}
@@ -936,9 +924,7 @@ export const ChatInputGemini: React.FC<ChatInputProps> = ({
               Click ■ to stop generation
             </span>
           ) : files.length > 0 ? (
-            <span
-              className="text-[0.72rem] text-[var(--text-tertiary)]"
-            >
+            <span className="text-[0.72rem] text-[var(--text-tertiary)]">
               {files.length} file{files.length > 1 ? 's' : ''} attached
             </span>
           ) : null}

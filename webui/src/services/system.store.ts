@@ -33,6 +33,8 @@ interface SystemState {
   providerConfigSchema: Record<string, unknown>;
   isAuthRequired: boolean;
   activeSidebarTab: SidebarTab;
+  isContextCompacting: boolean;
+  contextCompactionStatus: string | null;
   pendingRequestCount: number;
   pendingRequestsByKey: Record<string, number>;
   lastError: string | null;
@@ -63,6 +65,7 @@ interface SystemState {
   endModelOperation: () => void;
   setAuthRequired: (required: boolean) => void;
   setActiveSidebarTab: (tab: SidebarTab) => void;
+  setContextCompaction: (active: boolean, status?: string | null) => void;
   beginRequest: (requestKey?: string) => void;
   endRequest: (requestKey?: string) => void;
   setLastError: (message: string | null) => void;
@@ -97,6 +100,8 @@ export const useSystemStore = create<SystemState>((set) => ({
   providerConfigSchema: {},
   isAuthRequired: false,
   activeSidebarTab: 'history',
+  isContextCompacting: false,
+  contextCompactionStatus: null,
   pendingRequestCount: 0,
   pendingRequestsByKey: {},
   lastError: null,
@@ -194,6 +199,11 @@ export const useSystemStore = create<SystemState>((set) => ({
   endModelOperation: () => set({ modelOperation: null }),
   setAuthRequired: (required) => set({ isAuthRequired: required }),
   setActiveSidebarTab: (tab) => set({ activeSidebarTab: tab }),
+  setContextCompaction: (active, status = null) =>
+    set({
+      isContextCompacting: active,
+      contextCompactionStatus: active ? (status || 'Summarizing context...') : null,
+    }),
   beginRequest: (requestKey) =>
     set((state) => {
       const key = requestKey || '__global__';
@@ -257,6 +267,8 @@ export const useSystemStore = create<SystemState>((set) => ({
       canonicalChatParams: [],
       providerConfigSchema: {},
       isAuthRequired: false,
+      isContextCompacting: false,
+      contextCompactionStatus: null,
       pendingRequestCount: 0,
       pendingRequestsByKey: {},
       lastError: null,

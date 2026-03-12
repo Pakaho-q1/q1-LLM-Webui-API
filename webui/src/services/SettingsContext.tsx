@@ -23,6 +23,7 @@ export interface AppSettings {
   nGpuLayers: number;
   nThreads: number;
   nBatch: number;
+  contextCompactionThreshold: number;
 }
 
 interface SettingsContextType {
@@ -51,6 +52,7 @@ const defaultSettings: AppSettings = {
   nGpuLayers: -1,
   nThreads: 4,
   nBatch: 512,
+  contextCompactionThreshold: 3000,
 };
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -90,6 +92,17 @@ const sanitizeSettings = (payload: unknown): AppSettings => {
     nGpuLayers: Math.round(clamp(toFiniteNumber(source.nGpuLayers, defaultSettings.nGpuLayers), -1, 100)),
     nThreads: Math.round(clamp(toFiniteNumber(source.nThreads, defaultSettings.nThreads), 1, 64)),
     nBatch: Math.round(clamp(toFiniteNumber(source.nBatch, defaultSettings.nBatch), 128, 2048)),
+    contextCompactionThreshold: (() => {
+      const nCtx = Math.round(clamp(toFiniteNumber(source.nCtx, defaultSettings.nCtx), 512, 32768));
+      const maxAllowed = Math.max(256, Math.floor(nCtx * 0.8));
+      return Math.round(
+        clamp(
+          toFiniteNumber(source.contextCompactionThreshold, defaultSettings.contextCompactionThreshold),
+          256,
+          maxAllowed,
+        ),
+      );
+    })(),
   };
 };
 

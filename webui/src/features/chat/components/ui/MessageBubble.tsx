@@ -13,20 +13,15 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronRight,
-  Edit2,
-  RefreshCw,
   Paperclip,
-  Trash2,
-  BookOpen,
-  Sparkles,
-  Clock3,
-  Gauge,
   Save,
   X as XIcon,
 } from 'lucide-react';
 import { MermaidBlock } from './mermaid-repair-engine/MermaidBlock';
 import { parseThinking, preprocessContent } from './utils';
 import { MessageBubbleProps } from './types';
+import { MessageActions } from './message/MessageActions';
+import { MessageMetrics } from './message/MessageMetrics';
 import { API_BASE, getApiHeaders } from '@/services/api.service';
 import { useSystemStore } from '@/services/system.store';
 
@@ -374,25 +369,11 @@ export const MessageBubble: React.FC<
   const formattedContent = preprocessContent(cleanContent);
   const isUser = msg.role === 'user';
   const isAssistant = msg.role === 'assistant' || msg.role === 'model';
-  const metrics = msg.metrics || {};
   const currentModel = useSystemStore((state) => state.currentModel);
 
   useEffect(() => {
     setEditDraft(msg.content || '');
   }, [msg.content, msg.id]);
-
-  const formatNumber = (value?: number) =>
-    typeof value === 'number' && Number.isFinite(value)
-      ? value.toLocaleString()
-      : '-';
-  const formatMsAsSeconds = (value?: number) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-    return `${(value / 1000).toFixed(2)}s`;
-  };
-  const formatSpeed = (value?: number) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-    return `${value.toFixed(2)} t/s`;
-  };
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -685,93 +666,19 @@ export const MessageBubble: React.FC<
         </div>
 
         {isAssistant && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[0.72rem] text-[var(--text-secondary)]">
-            <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]">
-              <Sparkles size={11} />
-              {currentModel || 'assistant'}
-            </span>
-            <span
-              title={`Prompt tokens: ${formatNumber(metrics.prompt_tokens)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <BookOpen size={11} />
-              {formatNumber(metrics.prompt_tokens)}
-            </span>
-            <span
-              title={`Prompt processing time: ${formatMsAsSeconds(metrics.prompt_processing_time_ms)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <Clock3 size={11} />
-              {formatMsAsSeconds(metrics.prompt_processing_time_ms)}
-            </span>
-            <span
-              title={`Prompt processing speed: ${formatSpeed(metrics.prompt_tokens_per_sec)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <Gauge size={11} />
-              {formatSpeed(metrics.prompt_tokens_per_sec)}
-            </span>
-            <span
-              title={`Generated tokens: ${formatNumber(metrics.generated_tokens)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <Sparkles size={11} />
-              {formatNumber(metrics.generated_tokens)}
-            </span>
-            <span
-              title={`Generation time: ${formatMsAsSeconds(metrics.generation_time_ms)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <Clock3 size={11} />
-              {formatMsAsSeconds(metrics.generation_time_ms)}
-            </span>
-            <span
-              title={`Generation speed: ${formatSpeed(metrics.generation_tokens_per_sec)}`}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-[3px]"
-            >
-              <Gauge size={11} />
-              {formatSpeed(metrics.generation_tokens_per_sec)}
-            </span>
-          </div>
+          <MessageMetrics msg={msg} currentModel={currentModel || 'assistant'} />
         )}
 
-        <div className={`mt-2 flex flex-wrap gap-1.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
-          <button
-            onClick={handleCopyMessage}
-            title="Copy message"
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 text-[var(--text-secondary)]"
-          >
-            {copiedText?.startsWith('message:') ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-          {onEdit && (
-            <button
-              onClick={() => setIsEditing(true)}
-              title="Edit message"
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 text-[var(--text-secondary)]"
-            >
-              <Edit2 size={12} />
-            </button>
-          )}
-          {onRetry && isAssistant && (
-            <button
-              onClick={() => onRetry(msg)}
-              title="Regenerate response"
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 text-[var(--text-secondary)]"
-            >
-              <RefreshCw size={12} />
-            </button>
-          )}
-          {onDelete && (
-            <button
-              onClick={() => onDelete(msg)}
-              title="Delete message"
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 text-[var(--text-secondary)]"
-            >
-              <Trash2 size={12} />
-            </button>
-          )}
-
-        </div>
+        <MessageActions
+          msg={msg}
+          isUser={isUser}
+          isAssistant={isAssistant}
+          copiedText={copiedText}
+          onCopy={handleCopyMessage}
+          onStartEdit={onEdit ? () => setIsEditing(true) : undefined}
+          onRetry={onRetry}
+          onDelete={onDelete}
+        />
       </div>
     </div>
   );

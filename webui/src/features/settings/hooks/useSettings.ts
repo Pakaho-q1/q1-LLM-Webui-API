@@ -45,6 +45,9 @@ export const useSettings = () => {
         if (data.parameters.n_gpu_layers !== undefined) updateSetting('nGpuLayers', data.parameters.n_gpu_layers as number);
         if (data.parameters.n_threads !== undefined) updateSetting('nThreads', data.parameters.n_threads as number);
         if (data.parameters.n_batch !== undefined) updateSetting('nBatch', data.parameters.n_batch as number);
+        if (data.parameters.context_compaction_threshold !== undefined) {
+          updateSetting('contextCompactionThreshold', data.parameters.context_compaction_threshold as number);
+        }
       }
       setSelectedPresetName(data.name);
       setError(null);
@@ -81,6 +84,7 @@ export const useSettings = () => {
       n_gpu_layers: settings.nGpuLayers,
       n_threads: settings.nThreads,
       n_batch: settings.nBatch,
+      context_compaction_threshold: settings.contextCompactionThreshold,
     }),
     [settings],
   );

@@ -23,6 +23,7 @@ export interface ModelParameters {
   top_k?: number;
   n_ctx?: number;
   n_gpu_layers?: number;
+  context_compaction_threshold?: number;
   [key: string]: unknown;
 }
 

@@ -50,6 +50,7 @@ export const ChatContainer: React.FC = () => {
     if (providerSupportedChatParams.includes('presence_penalty')) payload.presence_penalty = settings.presencePenalty;
     if (providerSupportedChatParams.includes('frequency_penalty')) payload.frequency_penalty = settings.frequencyPenalty;
     if (providerSupportedChatParams.includes('seed')) payload.seed = settings.seed;
+    payload._context_compaction_threshold = settings.contextCompactionThreshold;
 
     sendMessage(
       text,

@@ -107,6 +107,14 @@ class HistoryManager:
             ON messages (conv_id, created_at ASC)
         """
         )
+        self._migrate_message_id_uniqueness(conn)
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conv_message_id_unique
+            ON messages (conv_id, message_id)
+            WHERE message_id IS NOT NULL
+        """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS episodic_facts (
@@ -162,6 +170,45 @@ class HistoryManager:
         )
         conn.commit()
 
+    def _migrate_message_id_uniqueness(self, conn: sqlite3.Connection) -> None:
+        # Normalize empty message_id so partial unique index can work consistently.
+        conn.execute(
+            "UPDATE messages SET message_id=NULL WHERE message_id IS NOT NULL AND TRIM(message_id)=''"
+        )
+        duplicate_keys = conn.execute(
+            """
+            SELECT conv_id, message_id
+            FROM messages
+            WHERE message_id IS NOT NULL
+            GROUP BY conv_id, message_id
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for key in duplicate_keys:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM messages
+                WHERE conv_id=? AND message_id=?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (key["conv_id"], key["message_id"]),
+            ).fetchall()
+            if len(rows) <= 1:
+                continue
+            delete_ids = [row["id"] for row in rows[1:]]
+            placeholders = ",".join("?" for _ in delete_ids)
+            conn.execute(
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                delete_ids,
+            )
+            logger.warning(
+                "Deduplicated %s duplicate messages for conv_id=%s message_id=%s",
+                len(delete_ids),
+                key["conv_id"],
+                key["message_id"],
+            )
+
     def _init_memory(self):
         config = {
             "vector_store": {
@@ -190,7 +237,22 @@ class HistoryManager:
             return self.tokenizer(text)
         return max(1, len(text) // 4)
 
-    def update_rolling_summary(self, conv_id: str, threshold_tokens: int = 5000):
+    def _get_conversation_token_total(self, conv_id: str) -> int:
+        rows = self._get_conn().execute(
+            """
+            SELECT content, tokens
+            FROM messages
+            WHERE conv_id=? AND is_archived=0
+            ORDER BY created_at ASC
+            """,
+            (conv_id,),
+        ).fetchall()
+        return sum((row["tokens"] or self._count_tokens(row["content"])) for row in rows)
+
+    def should_compact_context(self, conv_id: str, threshold_tokens: int = 5000) -> bool:
+        return self._get_conversation_token_total(conv_id) >= threshold_tokens
+
+    def update_rolling_summary(self, conv_id: str, threshold_tokens: int = 5000) -> bool:
         """
         อัปเดตสรุปประวัติแชทเมื่อ Token ดิบเกินกำหนด (เช่น 5000 Token)
         """
@@ -211,14 +273,14 @@ class HistoryManager:
         ).fetchall()
 
         if not messages:
-            return
+            return False
 
         total_tokens = sum(
             m["tokens"] or self._count_tokens(m["content"]) for m in messages
         )
 
         if total_tokens < threshold_tokens:
-            return
+            return False
 
         keep_tokens_limit = 1500
         kept_tokens = 0
@@ -236,7 +298,7 @@ class HistoryManager:
 
         messages_to_summarize = messages[:-keep_count]
         if not messages_to_summarize:
-            return
+            return False
 
         ids_to_archive = [msg["id"] for msg in messages_to_summarize]
 
@@ -302,6 +364,8 @@ class HistoryManager:
             logger.info(
                 f"Updated rolling summary for conversation: {conv_id}. Compressed {len(messages_to_summarize)} messages."
             )
+            return True
+        return False
 
     @staticmethod
     def _clean_text(text: str) -> str:
@@ -641,7 +705,6 @@ class HistoryManager:
         else:
             conn.execute("DELETE FROM semantic_memories WHERE conv_id=?", (conv_id,))
 
-        conn.execute("DELETE FROM episodic_facts WHERE conv_id=?", (conv_id,))
         conn.commit()
 
     def get_working_memory(self, conv_id: str, max_tokens: int) -> List[Dict[str, Any]]:
@@ -945,33 +1008,42 @@ class HistoryManager:
         response_tokens_estimate: Optional[int] = None,
         long_term_memories: Optional[List[Dict]] = None,
     ) -> List[Dict[str, Any]]:
+        real_n_ctx_raw = options.get("n_ctx", getattr(self.engine, "n_ctx", self.n_ctx))
+        real_n_ctx = max(512, int(real_n_ctx_raw))
 
-        real_n_ctx = getattr(self.engine, "n_ctx", self.n_ctx)
+        default_output = max(256, int(real_n_ctx * 0.15))
+        requested_output = (
+            options.get("max_tokens")
+            if options.get("max_tokens") is not None
+            else response_tokens_estimate
+        )
+        if requested_output is None:
+            requested_output = default_output
+        requested_output = max(1, int(requested_output))
 
-        real_n_ctx = options.get("n_ctx", real_n_ctx)
-
-        default_output = max(512, int(real_n_ctx * 0.15))
-
-        if options.get("max_tokens") is not None:
-            target_response_tokens = options["max_tokens"]
-        elif response_tokens_estimate is not None:
-            target_response_tokens = response_tokens_estimate
-        else:
-            target_response_tokens = default_output
-
-        max_output = int(real_n_ctx * 0.4)
-        target_response_tokens = min(target_response_tokens, max_output)
+        max_output = max(128, int(real_n_ctx * 0.4))
+        target_response_tokens = min(requested_output, max_output)
 
         user_input_tokens = self._count_tokens(user_input)
+        available_for_output = (
+            real_n_ctx - system_tokens_estimate - user_input_tokens - self.safety_margin
+        )
+        if available_for_output <= 0:
+            raise ValueError(
+                "Input is too large for the current context window after reserving safety margin."
+            )
+
+        # Hard guard: never allow planned output to exceed remaining context budget.
+        target_response_tokens = min(target_response_tokens, available_for_output)
+        options["max_tokens"] = int(target_response_tokens)
+
         fixed_budget = (
             system_tokens_estimate
             + user_input_tokens
             + target_response_tokens
             + self.safety_margin
         )
-
-        raw_memory_pool = real_n_ctx - fixed_budget
-        memory_pool = max(raw_memory_pool, 200)
+        memory_pool = max(0, real_n_ctx - fixed_budget)
 
         max_ltm_tokens = int(memory_pool * 0.4)
         ltm_list = long_term_memories or []
@@ -984,7 +1056,7 @@ class HistoryManager:
                 filtered_ltm.append(m)
                 ltm_tokens += tok
 
-        memory_pool -= ltm_tokens
+        memory_pool = max(0, memory_pool - ltm_tokens)
 
         max_episodic_tokens = int(memory_pool * 0.2)
         episodic_facts = self.get_episodic_facts(conv_id)
@@ -997,9 +1069,9 @@ class HistoryManager:
                 filtered_episodic.append(f)
                 episodic_tokens += tok
 
-        memory_pool -= episodic_tokens
+        memory_pool = max(0, memory_pool - episodic_tokens)
 
-        working_budget = memory_pool
+        working_budget = max(0, memory_pool)
 
         working = self.get_working_memory(conv_id, working_budget)
 

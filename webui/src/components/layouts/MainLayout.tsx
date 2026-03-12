@@ -12,6 +12,7 @@ import { useSystemStore } from '@/services/system.store';
 import { logger } from '@/services/logger';
 import { ConnectionState, useSSE } from '@/contexts/SSEContext';
 import { Combobox } from '@/components/ui/Combobox';
+import { BlockingOverlay } from '@/components/ui/BlockingOverlay';
 import { Sun, Moon, Menu, ChevronRight, Zap, ZapOff } from 'lucide-react';
 
 const LAST_MODEL_KEY = 'v1_last_selected_model';
@@ -49,6 +50,8 @@ export const MainLayout: React.FC = () => {
     useMainLayout();
   const currentProvider = useSystemStore((state) => state.currentProvider);
   const providerFeatures = useSystemStore((state) => state.providerFeatures);
+  const isContextCompacting = useSystemStore((state) => state.isContextCompacting);
+  const contextCompactionStatus = useSystemStore((state) => state.contextCompactionStatus);
   const { settings } = useSettings();
   const { isConnected, connectionState } = useSSE();
 
@@ -114,7 +117,7 @@ export const MainLayout: React.FC = () => {
           : 'No Model';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
+    <div className="relative flex h-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
       <aside
         className={`z-30 shrink-0 overflow-hidden border-r border-[var(--border)] bg-[var(--bg-sidebar)] transition-[width] duration-300 ${isSidebarOpen ? 'w-[350px]' : 'w-0'}`}
       >
@@ -235,6 +238,15 @@ export const MainLayout: React.FC = () => {
           <ChatContainer />
         </main>
       </div>
+
+      <BlockingOverlay
+        open={isContextCompacting}
+        title="กำลังย่อบริบท"
+        description={
+          contextCompactionStatus ||
+          'ระบบกำลังสรุปบทสนทนาเพื่อคืนพื้นที่ context... กรุณารอสักครู่'
+        }
+      />
     </div>
   );
 };

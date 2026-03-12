@@ -5,6 +5,7 @@ import { useProviderManager } from '../hooks/useProviderManager';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Combobox } from '@/components/ui/Combobox';
 import { Modal } from '@/components/ui/Modal';
+import { SectionCard } from '@/components/ui/SectionCard';
 import { X, Save } from 'lucide-react';
 import { ProviderName } from '@/types/provider.types';
 import { useSystemStore } from '@/services/system.store';
@@ -67,17 +68,7 @@ const SettingSlider: React.FC<SettingSliderProps> = ({
   </div>
 );
 
-const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
-  title,
-  children,
-}) => (
-  <section className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3.5">
-    <h3 className="mb-3.5 text-[0.75rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
-      {title}
-    </h3>
-    {children}
-  </section>
-);
+const Section = SectionCard;
 
 export const TabSettings: React.FC = () => {
   const { settings, updateSetting } = useSettingsContext();
@@ -136,6 +127,7 @@ export const TabSettings: React.FC = () => {
       ),
     [canonicalChatParams, providerSupportedChatParams],
   );
+  const contextCompactionMax = Math.max(256, Math.floor(settings.nCtx * 0.8));
 
   return (
     <div className="pb-10">
@@ -342,6 +334,20 @@ export const TabSettings: React.FC = () => {
       </Section>
 
       <Section title="Sampling">
+        <SettingSlider
+          label="Context Compaction Threshold"
+          value={Math.min(settings.contextCompactionThreshold, contextCompactionMax)}
+          min={256}
+          max={contextCompactionMax}
+          step={32}
+          onChange={(v) =>
+            updateSetting(
+              'contextCompactionThreshold',
+              Math.min(Math.max(Math.round(v), 256), contextCompactionMax),
+            )
+          }
+          tooltip="Start summarizing context when total chat tokens exceed this value (capped at 80% of n_ctx)."
+        />
         {supports('temperature') && (
           <SettingSlider
             label="Temperature"

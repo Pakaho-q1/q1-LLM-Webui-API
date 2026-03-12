@@ -85,6 +85,23 @@ class ChatOrchestrator:
         """รวบรวมข้อความ ประวัติ และความจำต่างๆ ตามลำดับเวลา"""
         loop = asyncio.get_running_loop()
         system_prompt = params.get("system_prompt", "You are a precise AI assistant.")
+        current_n_ctx = int(params.get("n_ctx") or getattr(self.engine, "n_ctx", 4096))
+        compaction_threshold = self._resolve_compaction_threshold(params, current_n_ctx)
+        should_compact = await loop.run_in_executor(
+            self.executor,
+            lambda: self.history.should_compact_context(
+                conv_id, threshold_tokens=compaction_threshold
+            ),
+        )
+        if should_compact:
+            await status_cb("Summarizing context...")
+            await loop.run_in_executor(
+                self.executor,
+                lambda: self.history.update_rolling_summary(
+                    conv_id, threshold_tokens=compaction_threshold
+                ),
+            )
+            await status_cb("Context summary updated.")
 
         await status_cb("Searching long-term memory...")
         long_term_memories = await loop.run_in_executor(
@@ -116,6 +133,19 @@ class ChatOrchestrator:
     def _estimate_system_tokens(self, system_prompt: str) -> int:
         base = len(system_prompt) // 4
         return base + 50
+
+    @staticmethod
+    def _resolve_compaction_threshold(params: Dict[str, Any], n_ctx: int) -> int:
+        raw_threshold = params.get("_context_compaction_threshold")
+        max_allowed = max(256, int(n_ctx * 0.8))
+        default_threshold = min(5000, max_allowed)
+        if raw_threshold is None:
+            return default_threshold
+        try:
+            parsed = int(raw_threshold)
+        except (TypeError, ValueError):
+            return default_threshold
+        return max(256, min(parsed, max_allowed))
 
     def _build_grounded_messages(self, user_input: str, params: Dict[str, Any]):
         if not self.retrieval_service or not params.get("use_rag"):

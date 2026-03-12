@@ -32,6 +32,7 @@ export const useChat = () => {
   const queryClient = useQueryClient();
   const pushToast = useSystemStore((state) => state.pushToast);
   const currentProvider = useSystemStore((state) => state.currentProvider);
+  const setContextCompaction = useSystemStore((state) => state.setContextCompaction);
 
   const {
     messages,
@@ -65,7 +66,8 @@ export const useChat = () => {
 
     setGenerating(false);
     stopAssistantTyping();
-  }, [setGenerating, stopAssistantTyping]);
+    setContextCompaction(false);
+  }, [setGenerating, setContextCompaction, stopAssistantTyping]);
 
   const sendMessage = useCallback(
     async (
@@ -245,6 +247,17 @@ export const useChat = () => {
           requestPayload,
           {
             signal: abortController.signal,
+            onStatus: (status: string) => {
+              const normalized = status.toLowerCase();
+              if (normalized.includes('context summary updated')) {
+                setContextCompaction(false);
+                return;
+              }
+              if (normalized.includes('summarizing context')) {
+                setContextCompaction(true, status);
+                return;
+              }
+            },
             onDelta: (chunk) => {
               streamChunkCount += 1;
               streamChars += chunk.length;
@@ -281,6 +294,7 @@ export const useChat = () => {
               });
               setGenerating(false);
               stopAssistantTyping(assistantMessageId || undefined);
+              setContextCompaction(false);
               streamAbortRef.current = null;
             },
           },
@@ -306,6 +320,7 @@ export const useChat = () => {
         if (userMessageId) removeMessageById(userMessageId);
         if (assistantMessageId) removeMessageById(assistantMessageId);
         setChatError(err instanceof Error ? err.message : 'Failed to send');
+        setContextCompaction(false);
         setGenerating(false);
         streamAbortRef.current = null;
       }
@@ -322,6 +337,7 @@ export const useChat = () => {
       DEFAULT_NEW_SESSION_TITLE,
       queryClient,
       pushToast,
+      setContextCompaction,
       setGenerating,
       setChatError,
       stopAssistantTyping,

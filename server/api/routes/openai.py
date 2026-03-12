@@ -324,6 +324,16 @@ def _inject_attachment_context(messages: List[Dict[str, Any]], attachment_contex
     ]
 
 
+def _extract_latest_system_prompt(messages: List[Dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if str(message.get("role") or "") != "system":
+            continue
+        text = _extract_text_from_content(message.get("content"))
+        if text.strip():
+            return text.strip()
+    return ""
+
+
 async def _proxy_json(method: str, path: str, token: str, **kwargs) -> JSONResponse:
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.request(method, f"{PROXY_BASE_URL}{path}", headers=_proxy_headers(token), **kwargs)
@@ -593,8 +603,35 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             param="messages",
         )
 
+    # Use server-side dynamic context budgeting by default so requests stay within n_ctx.
+    # Keep direct client messages only for multimodal flows that require structured content.
+    use_server_context = bool(merged_params.get("_use_server_context", True))
+    if has_image_input:
+        use_server_context = False
+
+    orchestrator_messages: List[Dict[str, Any]] | None = model_messages
+    if use_server_context:
+        orchestrator_messages = None
+        system_prompt = _extract_latest_system_prompt(model_messages)
+        if system_prompt and not str(merged_params.get("system_prompt") or "").strip():
+            merged_params["system_prompt"] = system_prompt
+        if attachment_context.strip():
+            existing_system_prompt = str(merged_params.get("system_prompt") or "").strip()
+            merged_params["system_prompt"] = (
+                f"{existing_system_prompt}\n\n{attachment_context.strip()}"
+                if existing_system_prompt
+                else attachment_context.strip()
+            )
+
     conversation_id = payload.conversation_id or "default_conv"
-    prompt_text_for_metrics = _build_prompt_text(model_messages)
+    prompt_messages_for_metrics = model_messages
+    if use_server_context:
+        prompt_messages_for_metrics = []
+        system_prompt_for_metrics = str(merged_params.get("system_prompt") or "").strip()
+        if system_prompt_for_metrics:
+            prompt_messages_for_metrics.append({"role": "system", "content": system_prompt_for_metrics})
+        prompt_messages_for_metrics.append({"role": "user", "content": str(user_input)})
+    prompt_text_for_metrics = _build_prompt_text(prompt_messages_for_metrics)
     loop = asyncio.get_running_loop()
     prompt_tokens = await loop.run_in_executor(
         app_state.executor,
@@ -609,7 +646,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                 client_id=payload.client_id,
                 conversation_id=conversation_id,
                 user_input=str(user_input),
-                messages=model_messages,
+                messages=orchestrator_messages,
                 params=merged_params,
                 request_id=payload.request_id,
                 prompt_tokens=prompt_tokens,
@@ -654,8 +691,8 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
         if invalid_params:
             response_headers["X-Invalid-Params"] = ",".join(invalid_params)
 
-        async def status_cb(_msg: str):
-            return None
+        async def status_cb(msg: str):
+            await queue.put({"type": "status", "message": str(msg or "")})
 
         generated_text_parts: List[str] = []
         first_chunk_at: float | None = None
@@ -698,7 +735,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                     merged_params,
                     status_cb,
                     chunk_cb,
-                    messages=model_messages,
+                    messages=orchestrator_messages,
                 )
                 completed_at = time.perf_counter()
                 full_text = "".join(generated_text_parts)
@@ -771,6 +808,14 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
                     return
 
                 chunk_data = item if isinstance(item, dict) else {"type": "chunk", "text": str(item)}
+                if chunk_data.get("type") == "status":
+                    status_event = {
+                        "type": "status",
+                        "message": str(chunk_data.get("message") or ""),
+                    }
+                    yield f"data: {json.dumps(status_event, ensure_ascii=False)}\n\n"
+                    continue
+
                 if chunk_data.get("type") != "chunk":
                     continue
                 chunk = {
@@ -849,7 +894,7 @@ async def openai_chat_completions(request: Request, payload: OpenAIChatCompletio
             merged_params,
             status_cb,
             chunk_cb,
-            messages=model_messages,
+            messages=orchestrator_messages,
         )
     except Exception as exc:
         return openai_error_response(

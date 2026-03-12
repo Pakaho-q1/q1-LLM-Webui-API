@@ -196,6 +196,7 @@ export const streamOpenAIChatCompletion = async (
     signal?: AbortSignal;
     onDelta: (chunk: string) => void;
     onMetrics?: (metrics: ChatStreamMetrics) => void;
+    onStatus?: (status: string) => void;
     onDone?: () => void;
     onWarnings?: (warnings: { unsupportedParams: string[]; invalidParams: string[] }) => void;
   },
@@ -267,6 +268,10 @@ export const streamOpenAIChatCompletion = async (
         const payload = JSON.parse(raw);
         if (payload?.error?.message) {
           throw new ApiError(payload.error.message, 500, '/v1/chat/completions', payload);
+        }
+        if (payload?.type === 'status' && typeof payload?.message === 'string') {
+          opts.onStatus?.(payload.message);
+          continue;
         }
         if (payload?.metrics && typeof payload.metrics === 'object') {
           opts.onMetrics?.(payload.metrics as ChatStreamMetrics);
